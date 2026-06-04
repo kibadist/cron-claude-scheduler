@@ -1,13 +1,16 @@
 import type { ProjectConfig, TicketInfo } from './types.js';
 
 export function branchName(identifier: string, title: string): string {
+  // Linear identifiers look like "KIB-12", but sanitize defensively so the
+  // result is always a valid git ref component.
+  const id = identifier.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
   const slug = title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 30)
     .replace(/-+$/, '');
-  return `claude/${identifier.toLowerCase()}${slug ? `-${slug}` : ''}`;
+  return `claude/${id}${slug ? `-${slug}` : ''}`;
 }
 
 function gitFlowInstructions(project: ProjectConfig, branch: string): string {
