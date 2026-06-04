@@ -1,18 +1,22 @@
 # cron-claude-scheduler
 
-**Turn your Linear Todo column into a work queue for autonomous Claude Code agents.**
+**Turn your Linear board into a work queue for autonomous Claude Code agents.**
 
-Move a ticket to **Todo** in Linear → within minutes, a [Claude Code](https://claude.com/claude-code) agent picks it up, implements it in the right local git repository, runs the tests, pushes a branch, opens a pull request, and moves the ticket to **In Review** with the PR link. You review the PR and merge. That's the whole workflow.
+Move a ticket to **Todo** in Linear → within minutes, a [Claude Code](https://claude.com/claude-code) agent picks it up, implements it in a disposable worktree of the right local git repository, runs the tests, pushes a branch, opens a pull request, and moves the ticket to **In Review**. When the Todo queue is empty, the same scheduler spends its ticks on the other half: a verification agent checks each In Review ticket **in the browser** against a running local build and moves it to **Done**. You merge PRs; everything else runs itself.
 
 ```
-┌─────────┐    poll     ┌───────────────┐   claude -p    ┌──────────────────┐
-│ Linear  │ ──────────► │   scheduler   │ ─────────────► │ local git repo   │
-│  Todo   │             │ (launchd tick │                │ implement + test │
-└─────────┘             │  every N min) │                │ commit + push    │
-     ▲                  └───────┬───────┘                └────────┬─────────┘
-     │                          │ verify push really happened     │
-     │   In Review + PR link    │ (git ls-remote / gh pr view)    ▼
-     └──────────────────────────┴──────────────────────  GitHub branch + PR
+            ┌──────────────────────── scheduler (launchd tick every N min) ───┐
+            │                                                                 │
+ Linear     │   work tick                          claude -p in a disposable  │
+ ┌────────┐ │   ┌──────────────────────────────►   worktree of origin/main    │
+ │  Todo  │─┘   │  implement → test → push → PR    (your checkout untouched)  │
+ └────────┘     │                                                             │
+ ┌──────────┐   ◄── verified: branch on origin? PR exists? (git ls-remote/gh) │
+ │In Review │─┐                                                               │
+ └──────────┘ │ verification tick (when Todo is empty)                        │
+ ┌────────┐   └──────────────────────────────►   /verify in a worktree of the │
+ │  Done  │  ◄── final `VERDICT: PASS` required   PR branch: run the app,     │
+ └────────┘      (fail-closed)                    check it in the browser     │
 ```
 
 ## Why
@@ -21,8 +25,9 @@ If you already write well-scoped tickets, the remaining work of *starting* an ag
 
 Design principles:
 
-- **Never trust the agent's word.** After every run the scheduler independently verifies the work landed on the remote (`git ls-remote`, `gh pr view`). "I pushed it" without a branch on origin is reported as a failure.
-- **Fail loudly, in Linear.** A failed run posts a 🤖 comment with the error and the log tail, and moves the ticket back to Todo — you see failures where you already work.
+- **Never trust the agent's word.** After every run the scheduler independently verifies the work landed on the remote (`git ls-remote`, `gh pr view`). "I pushed it" without a branch on origin is reported as a failure. Browser verification is fail-closed: only an explicit final `VERDICT: PASS` closes a ticket.
+- **Never touch the user's checkout.** Every run — work and verification — happens in a disposable git worktree in a temp directory. Your open editor, current branch, and uncommitted changes are physically out of reach.
+- **Fail loudly, in Linear.** A failed run posts a 🤖 comment with the error and the log tail — you see failures where you already work.
 - **One ticket at a time.** A PID lockfile serializes runs machine-wide. Predictable load, no token storms.
 - **Crash-safe.** State is persisted before every irreversible step; a killed run (reboot, crash) is detected on the next tick and the ticket is recovered automatically.
 
@@ -54,7 +59,7 @@ npm run tick
 npm run install-agent
 ```
 
-From then on: write a ticket, move it to **Todo**, review the PR that appears.
+From then on: write a ticket, move it to **Todo**, and merge the PR once the ticket reaches **Done** — implementation, push, PR, and browser verification all happen on their own.
 
 ## Configuration
 
@@ -70,7 +75,8 @@ From then on: write a ticket, move it to **Todo**, review the PR that appears.
   "statuses": {
     "todo": "Todo",
     "inProgress": "In Progress",
-    "inReview": "In Review"
+    "inReview": "In Review",
+    "done": "Done"
   },
   "projects": [
     {
@@ -116,6 +122,7 @@ Config is validated on startup with specific error messages (missing path, not a
 5. **Finalize** —
    - **Success:** ticket → *In Review*, 🤖 comment with the branch and PR link.
    - **Failure** (non-zero exit, timeout, or verification failed): 🤖 comment with the error and last 30 log lines, ticket → back to *Todo*, and it's **skipped** until you edit or comment on it — your touch means "try again". This prevents a broken ticket from burning tokens in a retry loop.
+6. **Hand-off** — the pushed branch is recorded against the ticket (so even renaming the ticket later can't lose it), and the ticket waits in *In Review* for a verification tick.
 
 ## Day-to-day commands
 
@@ -145,7 +152,7 @@ For each **In Review** ticket whose `claude/…` branch exists on origin (ticket
 4. **PASS** → ticket moves to **Done** with a verification report comment; the PR stays open — merging remains your call
 5. **FAIL** → 🤖 comment with the findings on the Linear ticket **and on the PR** (`gh pr comment`); the ticket stays In Review and is skipped until you touch it — or move it back to Todo to have the work agent fix the findings
 
-Work ticks and verification ticks share the same lockfile, so they never run simultaneously. Run `npm run review` on demand, `npm run review:loop` in a terminal, or wire a second launchd agent if you want it fully automatic.
+Work ticks and verification ticks share the same lockfile, so they never run simultaneously — and the default tick already alternates between them, so the single launchd agent drives the entire Todo → In Review → Done loop with no extra setup.
 
 ## Safety notes
 
@@ -153,6 +160,16 @@ Work ticks and verification ticks share the same lockfile, so they never run sim
 - Every run (work and verification) happens in a **disposable git worktree**, never in your actual checkout — your open editor, uncommitted changes, and current branch are untouched.
 - Secrets stay local: `.env` and `config.json` are gitignored.
 - A laptop that sleeps mid-run is fine: launchd fires the missed tick on wake, the stale lock is detected, and the interrupted ticket is moved back to Todo with an explanatory comment.
+
+## How is this different from Claude Code's scheduled (cloud) agents?
+
+Claude Code's `/schedule` routines run **in Anthropic's cloud** on a cron — great for machine-independent chores (summarize issues, babysit PRs). This scheduler is a **local pipeline** where the orchestration is deterministic code and Claude is only the worker inside it:
+
+- It runs in **your repos with your toolchain** — local env files, databases, package caches, `gh`/`claude` auth.
+- It can **verify work in the browser** against an app running locally — impossible from a cloud sandbox.
+- Verification is **code, not trust**: pushes are proven via `git ls-remote`/`gh pr view`, verdicts are fail-closed, and the ticket lifecycle (locking, crash recovery, skip lists) is enforced by the scheduler, not by prompt obedience.
+
+The two compose fine: use this for the local factory floor, and `/schedule` for cloud-side chores around it.
 
 ## Troubleshooting
 
@@ -168,21 +185,22 @@ Work ticks and verification ticks share the same lockfile, so they never run sim
 ## Development
 
 ```bash
-npm test            # 61 tests: unit + full-lifecycle integration
+npm test            # 76 tests: unit + full-lifecycle integration
 npx tsc --noEmit    # typecheck
 ```
 
-The integration tests exercise the entire lifecycle against **real temporary git repositories** (a bare repo standing in for origin) with **stub `claude` executables** and an **in-memory Linear fake** — no API keys, no tokens, no network.
+The integration tests exercise both lifecycles (work and verification) against **real temporary git repositories** (a bare repo standing in for origin) with **stub `claude` executables** and an **in-memory Linear fake** — no API keys, no tokens, no network.
 
 ```
 src/
-  index.ts    entrypoint (one-shot tick, or --loop)
-  tick.ts     orchestration: lock → recover → select → claim → run → verify → finalize
-  config.ts   config.json loading + validation
-  linear.ts   Linear API gateway (@linear/sdk)
-  runner.ts   spawns claude, streams log, enforces timeout
-  verify.ts   independent push/PR verification
-  prompt.ts   ticket → agent prompt + branch naming
-  state.ts    crash recovery + failed-ticket skip list
-  lock.ts     PID lockfile (one run at a time)
+  index.ts     entrypoint: unified tick by default; --work / --review / --loop
+  tick.ts      orchestration: lock → recover → select → claim → run → verify → finalize
+  config.ts    config.json loading + validation
+  linear.ts    Linear API gateway (@linear/sdk)
+  runner.ts    spawns claude, streams log, enforces timeout
+  verify.ts    independent push/PR verification + PR comments
+  worktree.ts  disposable git worktrees (work + verification isolation)
+  prompt.ts    ticket → agent prompts (work + verify) + branch naming
+  state.ts     crash recovery, failed-ticket skip list, ticket → branch map
+  lock.ts      PID lockfile (one run at a time)
 ```
