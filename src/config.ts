@@ -1,0 +1,93 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+import type { Config, GitFlow, ProjectConfig } from './types.js';
+
+const GIT_FLOWS: readonly GitFlow[] = ['branch-pr', 'branch-push', 'main-push'];
+
+export class ConfigError extends Error {}
+
+function fail(msg: string): never {
+  throw new ConfigError(msg);
+}
+
+export function loadConfig(configPath: string): Config {
+  if (!existsSync(configPath)) fail(`Config file not found: ${configPath}`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch (e) {
+    fail(`Config is not valid JSON: ${(e as Error).message}`);
+  }
+  return validateConfig(raw);
+}
+
+export function validateConfig(raw: unknown): Config {
+  if (typeof raw !== 'object' || raw === null) fail('Config must be a JSON object');
+  const c = raw as Record<string, unknown>;
+
+  if (
+    typeof c.pollIntervalMinutes !== 'number' ||
+    !Number.isInteger(c.pollIntervalMinutes) ||
+    c.pollIntervalMinutes <= 0
+  )
+    fail('pollIntervalMinutes must be a positive integer');
+
+  const claude = c.claude as Record<string, unknown> | undefined;
+  if (typeof claude !== 'object' || claude === null) fail('claude section is required');
+  if (typeof claude.command !== 'string' || claude.command.length === 0)
+    fail('claude.command must be a non-empty string');
+  if (typeof claude.timeoutMinutes !== 'number' || claude.timeoutMinutes <= 0)
+    fail('claude.timeoutMinutes must be a positive number');
+
+  const statuses = c.statuses as Record<string, unknown> | undefined;
+  if (typeof statuses !== 'object' || statuses === null) fail('statuses section is required');
+  for (const key of ['todo', 'inProgress', 'inReview'] as const) {
+    if (typeof statuses[key] !== 'string' || (statuses[key] as string).length === 0)
+      fail(`statuses.${key} must be a non-empty string`);
+  }
+
+  if (!Array.isArray(c.projects) || c.projects.length === 0)
+    fail('projects must be a non-empty array');
+  const projects = (c.projects as unknown[]).map((p, i) => validateProject(p, i));
+
+  return {
+    pollIntervalMinutes: c.pollIntervalMinutes,
+    claude: { command: claude.command as string, timeoutMinutes: claude.timeoutMinutes as number },
+    statuses: {
+      todo: statuses.todo as string,
+      inProgress: statuses.inProgress as string,
+      inReview: statuses.inReview as string,
+    },
+    projects,
+  };
+}
+
+function validateProject(raw: unknown, index: number): ProjectConfig {
+  const at = `projects[${index}]`;
+  if (typeof raw !== 'object' || raw === null) fail(`${at} must be an object`);
+  const p = raw as Record<string, unknown>;
+
+  if (typeof p.linearProject !== 'string' || p.linearProject.length === 0)
+    fail(`${at}.linearProject must be a non-empty string`);
+  if (typeof p.path !== 'string' || !isAbsolute(p.path))
+    fail(`${at}.path must be an absolute path`);
+  if (!existsSync(p.path)) fail(`${at}.path does not exist: ${p.path}`);
+  if (!existsSync(join(p.path, '.git'))) fail(`${at}.path is not a git repository: ${p.path}`);
+  if (!GIT_FLOWS.includes(p.gitFlow as GitFlow))
+    fail(`${at}.gitFlow must be one of: ${GIT_FLOWS.join(', ')}`);
+  if (typeof p.baseBranch !== 'string' || p.baseBranch.length === 0)
+    fail(`${at}.baseBranch must be a non-empty string`);
+
+  return {
+    linearProject: p.linearProject,
+    path: p.path,
+    gitFlow: p.gitFlow as GitFlow,
+    baseBranch: p.baseBranch,
+  };
+}
+
+export function requireApiKey(): string {
+  const key = process.env.LINEAR_API_KEY;
+  if (!key) throw new ConfigError('LINEAR_API_KEY is not set (put it in .env)');
+  return key;
+}
