@@ -32,6 +32,11 @@ export function addVerifyWorktree(projectPath: string, branch: string): string {
   return addWorktree(projectPath, `origin/${branch}`, 'sched-verify-');
 }
 
+/** The commit a worktree is checked out at — the exact base the agent builds on. */
+export function worktreeHeadSha(worktreePath: string): string {
+  return git(worktreePath, ['rev-parse', 'HEAD']).trim();
+}
+
 /** Best-effort cleanup; a leaked temp worktree must never fail the tick. */
 export function removeWorktree(projectPath: string, worktreePath: string): void {
   try {

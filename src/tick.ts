@@ -5,8 +5,14 @@ import { acquireLock, releaseLock } from './lock.js';
 import { isSkipped, loadState, saveState, type SchedulerState } from './state.js';
 import { branchName, buildPrompt, buildVerifyPrompt } from './prompt.js';
 import { logTail, runClaude, type RunResult } from './runner.js';
-import { commentOnPr, remoteBranchExists, remoteHeadSha, verifyWork, type VerifyResult } from './verify.js';
-import { addVerifyWorktree, addWorkWorktree, deleteLocalBranch, removeWorktree } from './worktree.js';
+import { commentOnPr, remoteBranchExists, verifyWork, type VerifyResult } from './verify.js';
+import {
+  addVerifyWorktree,
+  addWorkWorktree,
+  deleteLocalBranch,
+  removeWorktree,
+  worktreeHeadSha,
+} from './worktree.js';
 
 export type TickOutcome = 'locked' | 'idle' | 'success' | 'failure';
 
@@ -47,8 +53,6 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     if (!project) return 'idle'; // defensive: fetch is filtered to configured projects
 
     const branch = branchName(ticket.identifier, ticket.title);
-    const preRunSha =
-      project.gitFlow === 'main-push' ? remoteHeadSha(project.path, project.baseBranch) : '';
 
     log(`working ${ticket.identifier} in ${project.path}`);
     // Persist the claim BEFORE moving the ticket in Linear. A crash in this
@@ -74,6 +78,11 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     let worktree: string | undefined;
     try {
       worktree = addWorkWorktree(project.path, project.baseBranch);
+      // For main-push, the verification baseline is the exact commit the agent
+      // builds on (the worktree's HEAD, just fetched) — capturing it any
+      // earlier would let a third party's concurrent push masquerade as the
+      // agent's work.
+      const preRunSha = project.gitFlow === 'main-push' ? worktreeHeadSha(worktree) : '';
       const result = await run({
         command: config.claude.command,
         prompt: buildPrompt(ticket, project, branch),
@@ -85,10 +94,12 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     } catch (e) {
       verdict = { ok: false, detail: `could not prepare the work workspace: ${(e as Error).message}` };
     } finally {
-      if (worktree) removeWorktree(project.path, worktree);
-      // The branch ref created inside the worktree is local clutter; the
-      // pushed remote branch is what verification and review use.
-      if (project.gitFlow !== 'main-push') deleteLocalBranch(project.path, branch);
+      if (worktree) {
+        removeWorktree(project.path, worktree);
+        // The branch ref created inside the worktree is local clutter; the
+        // pushed remote branch is what verification and review use.
+        if (project.gitFlow !== 'main-push') deleteLocalBranch(project.path, branch);
+      }
     }
 
     if (verdict.ok) {
@@ -162,6 +173,19 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     const projectNames = config.projects.map((p) => p.linearProject);
     const issues = await linear.fetchTodoIssues(projectNames, config.statuses.inReview);
     const eligible = issues.filter((t) => !isSkipped(state, t.id, t.updatedAt));
+
+    // Evict branch records for tickets that left In Review by any path other
+    // than our own PASS (merged/cancelled/moved manually) so the map stays
+    // bounded by the live In Review set.
+    const inReviewIds = new Set(issues.map((t) => t.id));
+    let pruned = false;
+    for (const id of Object.keys(state.branches)) {
+      if (!inReviewIds.has(id)) {
+        delete state.branches[id];
+        pruned = true;
+      }
+    }
+    if (pruned) saveState(paths.state, state);
 
     // Only verify tickets the scheduler actually worked: their branch must be
     // on origin. Tickets a human moved to In Review are left alone.

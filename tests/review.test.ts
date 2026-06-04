@@ -156,6 +156,21 @@ describe('runReviewTick', () => {
     expect(loadState(paths.state).branches['issue-1']).toBeUndefined(); // cleaned up
   });
 
+  it('evicts branch records for tickets that left In Review', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear(); // nothing In Review at all
+    const paths = makePaths();
+    saveState(paths.state, {
+      active: null,
+      skips: {},
+      branches: { 'stale-ticket': 'claude/old-1-gone' },
+    });
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
+
+    expect(await runReviewTick({ config, linear, paths })).toBe('idle');
+    expect(loadState(paths.state).branches).toEqual({});
+  });
+
   it('ignores In Review tickets whose branch is not on origin', async () => {
     const { workspace } = makeRepoPair(); // no branch pushed
     const linear = new FakeLinear();

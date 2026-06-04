@@ -118,6 +118,20 @@ describe('runTick', () => {
     expect(linear.issues.get('issue-1')!.comments.at(-1)).toContain('timed out');
   });
 
+  it('workspace prep failure: ticket goes back to Todo, never stuck In Progress', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    linear.add(makeTicket());
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
+    config.projects[0].baseBranch = 'no-such-branch'; // fetch will fail → addWorkWorktree throws
+
+    expect(await runTick({ config, linear, paths })).toBe('failure');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('Todo');
+    expect(issue.comments.at(-1)).toContain('could not prepare the work workspace');
+  });
+
   it('exits silently when another run holds the lock', async () => {
     const { workspace } = makeRepoPair();
     const paths = makePaths();
