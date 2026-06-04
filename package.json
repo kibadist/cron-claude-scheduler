@@ -1,0 +1,23 @@
+{
+  "name": "cron-claude-scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "tick": "npm run build && node dist/index.js",
+    "loop": "npm run build && node dist/index.js --loop",
+    "install-agent": "npm run build && bash scripts/install-agent.sh",
+    "uninstall-agent": "bash scripts/uninstall-agent.sh"
+  },
+  "dependencies": {
+    "@linear/sdk": "^86.0.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

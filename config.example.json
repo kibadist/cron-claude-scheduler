@@ -1,0 +1,26 @@
+{
+  "pollIntervalMinutes": 2,
+  "claude": {
+    "command": "claude",
+    "timeoutMinutes": 60
+  },
+  "statuses": {
+    "todo": "Todo",
+    "inProgress": "In Progress",
+    "inReview": "In Review"
+  },
+  "projects": [
+    {
+      "linearProject": "Kibadist Knowledge",
+      "path": "/Users/kibadist/Code/kibadist-knowledge",
+      "gitFlow": "branch-pr",
+      "baseBranch": "main"
+    },
+    {
+      "linearProject": "Detailing App",
+      "path": "/Users/kibadist/Code/detailingApp/detailing-app",
+      "gitFlow": "branch-push",
+      "baseBranch": "main"
+    }
+  ]
+}

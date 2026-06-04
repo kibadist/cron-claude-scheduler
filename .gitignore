@@ -1,0 +1,8 @@
+node_modules/
+dist/
+logs/
+.env
+config.json
+.state.json
+.scheduler.lock
+.omc/
