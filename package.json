@@ -11,6 +11,7 @@
     "test": "vitest run",
     "tick": "npm run build && node dist/index.js",
     "loop": "npm run build && node dist/index.js --loop",
+    "watch": "bash scripts/watch-log.sh",
     "install-agent": "npm run build && bash scripts/install-agent.sh",
     "uninstall-agent": "bash scripts/uninstall-agent.sh"
   },
