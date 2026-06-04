@@ -17,25 +17,25 @@ function gitFlowInstructions(project: ProjectConfig, branch: string): string {
   switch (project.gitFlow) {
     case 'branch-pr':
       return [
-        `1. Create and switch to a branch named exactly \`${branch}\` off \`${project.baseBranch}\`.`,
-        `2. Implement the task and make the project's tests pass.`,
+        `1. You are already on the tip of \`${project.baseBranch}\`. Create and switch to a branch named exactly \`${branch}\`: \`git checkout -b ${branch}\`.`,
+        `2. Implement the task and make the project's tests pass (install dependencies first if the project needs them).`,
         `3. Commit your work with clear messages.`,
         `4. Push the branch: \`git push -u origin ${branch}\`.`,
         `5. Open a pull request with \`gh pr create\` targeting \`${project.baseBranch}\`; put the ticket ID in the PR title.`,
       ].join('\n');
     case 'branch-push':
       return [
-        `1. Create and switch to a branch named exactly \`${branch}\` off \`${project.baseBranch}\`.`,
-        `2. Implement the task and make the project's tests pass.`,
+        `1. You are already on the tip of \`${project.baseBranch}\`. Create and switch to a branch named exactly \`${branch}\`: \`git checkout -b ${branch}\`.`,
+        `2. Implement the task and make the project's tests pass (install dependencies first if the project needs them).`,
         `3. Commit your work with clear messages.`,
         `4. Push the branch: \`git push -u origin ${branch}\`. Do NOT open a pull request.`,
       ].join('\n');
     case 'main-push':
       return [
-        `1. Work directly on \`${project.baseBranch}\`: make sure it is checked out and up to date (\`git pull origin ${project.baseBranch}\`).`,
-        `2. Implement the task and make the project's tests pass.`,
+        `1. You are on a detached checkout of the tip of \`${project.baseBranch}\` — do not switch branches.`,
+        `2. Implement the task and make the project's tests pass (install dependencies first if the project needs them).`,
         `3. Commit your work with clear messages.`,
-        `4. Push: \`git push origin ${project.baseBranch}\`.`,
+        `4. Push: \`git push origin HEAD:${project.baseBranch}\`.`,
       ].join('\n');
   }
 }
@@ -57,7 +57,11 @@ ${comments}`;
 }
 
 export function buildPrompt(ticket: TicketInfo, project: ProjectConfig, branch: string): string {
-  return `You are working autonomously on a Linear ticket in this repository.
+  return `You are working autonomously on a Linear ticket.
+
+You are in a TEMPORARY, DISPOSABLE workspace (a git worktree created for this
+ticket). The user's main checkout lives elsewhere — this directory will be
+deleted after you finish, so anything you don't push is lost.
 
 ${ticketSection(ticket)}
 

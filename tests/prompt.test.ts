@@ -70,6 +70,6 @@ describe('buildPrompt', () => {
 
   it('tells main-push to work on the base branch', () => {
     const prompt = buildPrompt(makeTicket(), makeProject({ gitFlow: 'main-push', baseBranch: 'main' }), 'unused');
-    expect(prompt).toContain('git push origin main');
+    expect(prompt).toContain('git push origin HEAD:main');
   });
 });

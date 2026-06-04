@@ -12,13 +12,14 @@ beforeEach(() => {
 
 describe('state persistence', () => {
   it('returns empty state when no file exists', () => {
-    expect(loadState(statePath)).toEqual({ active: null, skips: {} });
+    expect(loadState(statePath)).toEqual({ active: null, skips: {}, branches: {} });
   });
 
   it('round-trips state', () => {
     const state: SchedulerState = {
       active: { issueId: 'abc', identifier: 'KIB-1', startedAt: '2026-06-04T10:00:00.000Z' },
       skips: { abc: '2026-06-04T09:00:00.000Z' },
+      branches: { abc: 'claude/kib-1-something' },
     };
     saveState(statePath, state);
     expect(loadState(statePath)).toEqual(state);
@@ -26,7 +27,7 @@ describe('state persistence', () => {
 
   it('returns empty state for a corrupt file', () => {
     writeFileSync(statePath, '{corrupt');
-    expect(loadState(statePath)).toEqual({ active: null, skips: {} });
+    expect(loadState(statePath)).toEqual({ active: null, skips: {}, branches: {} });
   });
 });
 

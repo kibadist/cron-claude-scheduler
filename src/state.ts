@@ -16,15 +16,18 @@ export interface SchedulerState {
   active: ActiveTicket | null;
   /** issueId -> the ticket's updatedAt recorded right after our failure writes */
   skips: Record<string, string>;
+  /** issueId -> branch pushed by a successful work run; lets the review tick
+   * find the branch even when the ticket's title was edited afterwards */
+  branches: Record<string, string>;
 }
 
 export function loadState(statePath: string): SchedulerState {
-  if (!existsSync(statePath)) return { active: null, skips: {} };
+  if (!existsSync(statePath)) return { active: null, skips: {}, branches: {} };
   try {
     const raw = JSON.parse(readFileSync(statePath, 'utf8')) as Partial<SchedulerState>;
-    return { active: raw.active ?? null, skips: raw.skips ?? {} };
+    return { active: raw.active ?? null, skips: raw.skips ?? {}, branches: raw.branches ?? {} };
   } catch {
-    return { active: null, skips: {} };
+    return { active: null, skips: {}, branches: {} };
   }
 }
 

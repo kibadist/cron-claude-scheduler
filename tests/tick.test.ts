@@ -7,7 +7,7 @@ import { runTick, type TickPaths } from '../src/tick.js';
 import { acquireLock } from '../src/lock.js';
 import { saveState } from '../src/state.js';
 import { remoteBranchExists } from '../src/verify.js';
-import { makeRepoPair } from './helpers/git.js';
+import { git, makeRepoPair } from './helpers/git.js';
 import { FakeLinear, makeTicket } from './helpers/fake-linear.js';
 import type { Config, GitFlow } from '../src/types.js';
 
@@ -44,6 +44,13 @@ describe('runTick', () => {
     expect(issue.status).toBe('In Review');
     expect(issue.comments.at(-1)).toContain('claude/kib-1-add-hello-endpoint');
     expect(remoteBranchExists(workspace, 'claude/kib-1-add-hello-endpoint')).toBe(true);
+
+    // the user's checkout was never touched: still on main, clean, no local
+    // claude/ branch, no leftover worktrees
+    expect(git(workspace, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('main');
+    expect(git(workspace, 'status', '--porcelain').trim()).toBe('');
+    expect(git(workspace, 'branch', '--list', 'claude/*').trim()).toBe('');
+    expect(git(workspace, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
   });
 
   it('returns idle when there are no eligible tickets', async () => {
@@ -128,6 +135,7 @@ describe('runTick', () => {
     saveState(paths.state, {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z' },
       skips: {},
+      branches: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
 
@@ -149,6 +157,7 @@ describe('runTick', () => {
     saveState(paths.state, {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z' },
       skips: {},
+      branches: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
 

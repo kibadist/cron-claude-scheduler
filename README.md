@@ -111,7 +111,7 @@ Config is validated on startup with specific error messages (missing path, not a
 
 1. **Select** — highest-priority (urgent → low, no-priority last), then oldest Todo ticket across your configured projects.
 2. **Claim** — ticket moves to *In Progress*; the claim is persisted locally first, so a crash at any point is recoverable.
-3. **Run** — `claude -p --dangerously-skip-permissions` is spawned in the project directory with a prompt built from the ticket's title, description, and comments, plus the git-flow instructions. Output streams to `logs/<TICKET>-<timestamp>.log`.
+3. **Run** — `claude -p --dangerously-skip-permissions` is spawned in a **disposable git worktree** of the tip of `baseBranch` (your main checkout is never touched — no branch switches, no dirty-tree collisions), with a prompt built from the ticket's title, description, and comments, plus the git-flow instructions. Output streams to `logs/<TICKET>-<timestamp>.log`. The worktree is removed after the run; only what was pushed survives.
 4. **Verify** — the scheduler checks the remote itself; the agent's claims are never trusted.
 5. **Finalize** —
    - **Success:** ticket → *In Review*, 🤖 comment with the branch and PR link.
@@ -121,10 +121,11 @@ Config is validated on startup with specific error messages (missing path, not a
 
 | Command | What it does |
 |---|---|
-| `npm run tick` | Run exactly one work tick in the foreground |
-| `npm run loop` | Run work ticks continuously in a terminal (any OS; safe alongside launchd — the lockfile prevents overlap) |
-| `npm run review` | Run one **verification tick** (see below) |
-| `npm run review:loop` | Run verification ticks continuously |
+| `npm run tick` | Run one tick: work the Todo queue, or verify an In Review ticket when Todo is empty |
+| `npm run loop` | Run ticks continuously in a terminal (any OS; safe alongside launchd — the lockfile prevents overlap) |
+| `npm run work` | One work-only tick (skip verification) |
+| `npm run review` | One verification-only tick (see below) |
+| `npm run review:loop` | Verification-only ticks, continuously |
 | `npm run watch` | Live-tail the active ticket's run log, auto-switching between runs |
 | `npm run install-agent` | Install + start the launchd agent (ticks every `pollIntervalMinutes`, survives reboots) |
 | `npm run uninstall-agent` | Stop and remove the launchd agent |
@@ -134,7 +135,7 @@ Logs: `logs/<TICKET>-<timestamp>.log` per work run, `logs/<TICKET>-verify-<times
 
 ## Verification mode (`npm run review`)
 
-The second half of the loop: instead of you reviewing every In Review ticket by hand, a verification agent checks the work **in the browser** and closes the ticket.
+The second half of the loop: instead of you reviewing every In Review ticket by hand, a verification agent checks the work **in the browser** and closes the ticket. The default tick does this automatically whenever the Todo queue is empty; `npm run review` forces a verification-only tick.
 
 For each **In Review** ticket whose `claude/…` branch exists on origin (tickets a human moved to In Review are left alone), the scheduler:
 
@@ -148,7 +149,8 @@ Work ticks and verification ticks share the same lockfile, so they never run sim
 
 ## Safety notes
 
-- The agent runs with `--dangerously-skip-permissions` **in your local repositories** — that's what makes unattended operation possible. Only configure projects you trust the agent to modify, and prefer `branch-pr` so nothing lands on your base branch without your review.
+- The agent runs with `--dangerously-skip-permissions` — that's what makes unattended operation possible. Only configure projects you trust the agent to work on, and prefer `branch-pr` so nothing lands on your base branch without your review.
+- Every run (work and verification) happens in a **disposable git worktree**, never in your actual checkout — your open editor, uncommitted changes, and current branch are untouched.
 - Secrets stay local: `.env` and `config.json` are gitignored.
 - A laptop that sleeps mid-run is fine: launchd fires the missed tick on wake, the stale lock is detected, and the interrupted ticket is moved back to Todo with an explanatory comment.
 

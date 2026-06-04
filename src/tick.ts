@@ -6,7 +6,7 @@ import { isSkipped, loadState, saveState, type SchedulerState } from './state.js
 import { branchName, buildPrompt, buildVerifyPrompt } from './prompt.js';
 import { logTail, runClaude, type RunResult } from './runner.js';
 import { commentOnPr, remoteBranchExists, remoteHeadSha, verifyWork, type VerifyResult } from './verify.js';
-import { addVerifyWorktree, removeVerifyWorktree } from './worktree.js';
+import { addVerifyWorktree, addWorkWorktree, deleteLocalBranch, removeWorktree } from './worktree.js';
 
 export type TickOutcome = 'locked' | 'idle' | 'success' | 'failure';
 
@@ -67,20 +67,37 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const logPath = join(paths.logsDir, `${ticket.identifier}-${stamp}.log`);
-    const result = await run({
-      command: config.claude.command,
-      prompt: buildPrompt(ticket, project, branch),
-      cwd: project.path,
-      timeoutMs: config.claude.timeoutMinutes * 60_000,
-      logPath,
-    });
 
-    const verdict = verdictFor(result, project, branch, preRunSha, config.claude.timeoutMinutes);
+    // The agent works in a disposable worktree of origin/<baseBranch> so the
+    // user's main checkout is never touched (branch switches, dirty trees, …).
+    let verdict: VerifyResult;
+    let worktree: string | undefined;
+    try {
+      worktree = addWorkWorktree(project.path, project.baseBranch);
+      const result = await run({
+        command: config.claude.command,
+        prompt: buildPrompt(ticket, project, branch),
+        cwd: worktree,
+        timeoutMs: config.claude.timeoutMinutes * 60_000,
+        logPath,
+      });
+      verdict = verdictFor(result, project, branch, preRunSha, config.claude.timeoutMinutes);
+    } catch (e) {
+      verdict = { ok: false, detail: `could not prepare the work workspace: ${(e as Error).message}` };
+    } finally {
+      if (worktree) removeWorktree(project.path, worktree);
+      // The branch ref created inside the worktree is local clutter; the
+      // pushed remote branch is what verification and review use.
+      if (project.gitFlow !== 'main-push') deleteLocalBranch(project.path, branch);
+    }
 
     if (verdict.ok) {
       await linear.addComment(ticket.id, successComment(verdict, branch, project));
       await linear.moveIssue(ticket.id, config.statuses.inReview);
       delete state.skips[ticket.id];
+      // Remember the pushed branch so the review tick still finds it if the
+      // ticket's title gets edited later.
+      if (project.gitFlow !== 'main-push') state.branches[ticket.id] = branch;
       state.active = null;
       saveState(paths.state, state);
       log(`done ${ticket.identifier}: ${verdict.detail}`);
@@ -154,7 +171,8 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
         (p) => p.linearProject.toLowerCase() === ticket.projectName.toLowerCase(),
       );
       if (!project) continue;
-      const branch = branchName(ticket.identifier, ticket.title);
+      // Prefer the branch recorded by the work run — it survives title edits.
+      const branch = state.branches[ticket.id] ?? branchName(ticket.identifier, ticket.title);
       try {
         if (remoteBranchExists(project.path, branch)) {
           picked = { ticket, project, branch };
@@ -194,7 +212,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     } catch (e) {
       detail = `could not prepare the verification workspace: ${(e as Error).message}`;
     } finally {
-      if (worktree) removeVerifyWorktree(project.path, worktree);
+      if (worktree) removeWorktree(project.path, worktree);
     }
 
     if (detail === null) {
@@ -215,6 +233,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
         return 'failure';
       }
       delete state.skips[ticket.id];
+      delete state.branches[ticket.id]; // ticket is Done; no longer needed
       state.active = null;
       saveState(paths.state, state);
       log(`verified ${ticket.identifier}: PASS → ${config.statuses.done}`);
@@ -236,6 +255,17 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
   } finally {
     releaseLock(paths.lock);
   }
+}
+
+/**
+ * The default tick: work the Todo queue first; when there is no work to do,
+ * spend the tick verifying an In Review ticket instead. One launchd agent
+ * drives the whole Todo → In Review → Done loop.
+ */
+export async function runAutoTick(deps: TickDeps): Promise<TickOutcome> {
+  const outcome = await runTick(deps);
+  if (outcome !== 'idle') return outcome;
+  return runReviewTick(deps);
 }
 
 /** null = verified PASS; otherwise a human-readable failure detail. Fail-closed:

@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ConfigError, loadConfig, requireApiKey } from './config.js';
 import { LinearApi } from './linear.js';
-import { runReviewTick, runTick } from './tick.js';
+import { runAutoTick, runReviewTick, runTick } from './tick.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -20,13 +20,18 @@ async function main(): Promise<void> {
 
   const log = (msg: string): void => console.log(`[${new Date().toISOString()}] ${msg}`);
   const loop = process.argv.includes('--loop');
-  const review = process.argv.includes('--review');
-  const tick = review ? runReviewTick : runTick;
+  // Default: work the Todo queue, and verify In Review tickets when idle.
+  // --work / --review restrict a run to a single mode.
+  const [tick, label] = process.argv.includes('--review')
+    ? ([runReviewTick, 'review tick'] as const)
+    : process.argv.includes('--work')
+      ? ([runTick, 'work tick'] as const)
+      : ([runAutoTick, 'tick'] as const);
 
   do {
-    log(`${review ? 'review tick' : 'tick'} starting (pid ${process.pid})`);
+    log(`${label} starting (pid ${process.pid})`);
     const outcome = await tick({ config, linear, paths, log });
-    log(`${review ? 'review tick' : 'tick'}: ${outcome}`);
+    log(`${label}: ${outcome}`);
     if (loop) await sleep(config.pollIntervalMinutes * 60_000);
   } while (loop);
 }

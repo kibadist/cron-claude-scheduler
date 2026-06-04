@@ -11,6 +11,7 @@
     "test": "vitest run",
     "tick": "npm run build && node dist/index.js",
     "loop": "npm run build && node dist/index.js --loop",
+    "work": "npm run build && node dist/index.js --work",
     "review": "npm run build && node dist/index.js --review",
     "review:loop": "npm run build && node dist/index.js --review --loop",
     "watch": "bash scripts/watch-log.sh",

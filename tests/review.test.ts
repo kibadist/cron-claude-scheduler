@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runReviewTick, runTick, type TickPaths } from '../src/tick.js';
+import { runAutoTick, runReviewTick, runTick, type TickPaths } from '../src/tick.js';
 import { saveState, loadState } from '../src/state.js';
 import { makeRepoPair, commitAndPush } from './helpers/git.js';
 import { FakeLinear, makeTicket } from './helpers/fake-linear.js';
@@ -138,6 +138,24 @@ describe('runReviewTick', () => {
     expect(await runReviewTick({ config, linear, paths })).toBe('idle');
   });
 
+  it('finds the branch via the recorded mapping when the title was edited after the work run', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt'); // branch from the ORIGINAL title
+    const linear = new FakeLinear();
+    linear.add(makeTicket({ title: 'Completely renamed by a human' }), 'In Review');
+    const paths = makePaths();
+    saveState(paths.state, {
+      active: null,
+      skips: {},
+      branches: { 'issue-1': BRANCH }, // recorded by the work run
+    });
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
+
+    expect(await runReviewTick({ config, linear, paths })).toBe('success');
+    expect(linear.issues.get('issue-1')!.status).toBe('Done');
+    expect(loadState(paths.state).branches['issue-1']).toBeUndefined(); // cleaned up
+  });
+
   it('ignores In Review tickets whose branch is not on origin', async () => {
     const { workspace } = makeRepoPair(); // no branch pushed
     const linear = new FakeLinear();
@@ -158,6 +176,7 @@ describe('runReviewTick', () => {
     saveState(paths.state, {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z', mode: 'review' },
       skips: {},
+      branches: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -178,6 +197,7 @@ describe('runReviewTick', () => {
     saveState(paths.state, {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z', mode: 'work' },
       skips: {},
+      branches: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -185,6 +205,31 @@ describe('runReviewTick', () => {
     const issue = linear.issues.get('issue-1')!;
     expect(issue.status).toBe('Todo');
     expect(issue.comments[0]).toContain('interrupted');
+  });
+});
+
+describe('runAutoTick', () => {
+  it('works the Todo queue when there is work', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    linear.add(makeTicket()); // Todo
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'), 'branch-push');
+
+    expect(await runAutoTick({ config, linear, paths })).toBe('success');
+    expect(linear.issues.get('issue-1')!.status).toBe('In Review');
+  });
+
+  it('falls through to verification when Todo is empty', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review'); // nothing in Todo
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
+
+    expect(await runAutoTick({ config, linear, paths })).toBe('success');
+    expect(linear.issues.get('issue-1')!.status).toBe('Done');
   });
 });
 
@@ -197,6 +242,7 @@ describe('runTick with a review-mode active record', () => {
     saveState(paths.state, {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z', mode: 'review' },
       skips: {},
+      branches: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'), 'branch-push');
 
