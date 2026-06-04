@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LABEL="com.kibadist.claude-scheduler"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+NODE_BIN="$(command -v node)"
+CLAUDE_BIN="$(command -v claude || true)"
+GH_BIN="$(command -v gh || true)"
+
+if [[ ! -f "$REPO_DIR/config.json" ]]; then
+  echo "config.json not found — copy config.example.json to config.json and edit it first" >&2
+  exit 1
+fi
+if [[ ! -f "$REPO_DIR/dist/index.js" ]]; then
+  echo "dist/index.js not found — run: npm run build" >&2
+  exit 1
+fi
+if [[ -z "$CLAUDE_BIN" ]]; then
+  echo "warning: claude CLI not found on PATH — the scheduler will fail to spawn it" >&2
+fi
+
+INTERVAL_MIN="$("$NODE_BIN" -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).pollIntervalMinutes)" "$REPO_DIR/config.json")"
+INTERVAL_SEC=$((INTERVAL_MIN * 60))
+
+EXTRA_PATH="$(dirname "$NODE_BIN")"
+[[ -n "$CLAUDE_BIN" ]] && EXTRA_PATH="$EXTRA_PATH:$(dirname "$CLAUDE_BIN")"
+[[ -n "$GH_BIN" ]] && EXTRA_PATH="$EXTRA_PATH:$(dirname "$GH_BIN")"
+
+mkdir -p "$REPO_DIR/logs" "$HOME/Library/LaunchAgents"
+
+cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$NODE_BIN</string>
+    <string>$REPO_DIR/dist/index.js</string>
+  </array>
+  <key>WorkingDirectory</key><string>$REPO_DIR</string>
+  <key>StartInterval</key><integer>$INTERVAL_SEC</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$REPO_DIR/logs/launchd.log</string>
+  <key>StandardErrorPath</key><string>$REPO_DIR/logs/launchd.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$EXTRA_PATH:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST"
+echo "Installed and started $LABEL (tick every $INTERVAL_MIN min)."
+echo "Logs: $REPO_DIR/logs/launchd.log"
