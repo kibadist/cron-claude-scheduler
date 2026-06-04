@@ -91,6 +91,53 @@ describe('runReviewTick', () => {
     expect(issue.comments.at(-1)).toContain('VERDICT');
   });
 
+  it('is not fooled by an early quoted PASS marker before a final FAIL', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-quoted.sh'));
+
+    expect(await runReviewTick({ config, linear, paths })).toBe('failure');
+    expect(linear.issues.get('issue-1')!.status).toBe('In Review');
+  });
+
+  it('reports a timeout as a failed verification', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-slow.sh'));
+    config.claude.timeoutMinutes = 0.01; // 600ms
+
+    expect(await runReviewTick({ config, linear, paths })).toBe('failure');
+    expect(linear.issues.get('issue-1')!.comments.at(-1)).toContain('timed out');
+  });
+
+  it('does not crash-loop when the Done state is misnamed', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    class NoDoneLinear extends FakeLinear {
+      override async moveIssue(issueId: string, statusName: string): Promise<void> {
+        if (statusName === 'Done') throw new Error('Workflow state "Done" not found');
+        await super.moveIssue(issueId, statusName);
+      }
+    }
+    const linear = new NoDoneLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
+
+    expect(await runReviewTick({ config, linear, paths })).toBe('failure');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('In Review');
+    expect(issue.comments.at(-1)).toContain('statuses.done');
+    // skipped now — no repeated verification burn
+    expect(await runReviewTick({ config, linear, paths })).toBe('idle');
+  });
+
   it('ignores In Review tickets whose branch is not on origin', async () => {
     const { workspace } = makeRepoPair(); // no branch pushed
     const linear = new FakeLinear();

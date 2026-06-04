@@ -199,7 +199,21 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
 
     if (detail === null) {
       await linear.addComment(ticket.id, verifySuccessComment(branch, logTail(logPath, 15)));
-      await linear.moveIssue(ticket.id, config.statuses.done);
+      try {
+        await linear.moveIssue(ticket.id, config.statuses.done);
+      } catch (e) {
+        // A misnamed Done state must not crash-loop full verification runs:
+        // surface the config problem and skip the ticket until it's touched.
+        await linear.addComment(
+          ticket.id,
+          `🤖 Scheduler: verification PASSED but the ticket could not be moved to "${config.statuses.done}": ${(e as Error).message}. Check statuses.done in config.json, then edit or comment on this ticket to retry.`,
+        );
+        state.skips[ticket.id] = await linear.getUpdatedAt(ticket.id);
+        state.active = null;
+        saveState(paths.state, state);
+        log(`verified ${ticket.identifier} but could not move to ${config.statuses.done}`);
+        return 'failure';
+      }
       delete state.skips[ticket.id];
       state.active = null;
       saveState(paths.state, state);
@@ -225,15 +239,21 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
 }
 
 /** null = verified PASS; otherwise a human-readable failure detail. Fail-closed:
- * anything short of a clean exit plus an explicit PASS marker is a failure. */
+ * anything short of a clean exit plus an explicit FINAL PASS marker is a failure.
+ * Only the LAST verdict line in the whole log counts — an early line merely
+ * quoting the "VERDICT: PASS" instruction must not override a final FAIL. */
 function reviewVerdict(result: RunResult, logPath: string, timeoutMinutes: number): string | null {
   if (result.timedOut) return `verification timed out after ${timeoutMinutes} minutes`;
   if (result.exitCode !== 0)
     return result.exitCode === null
       ? 'claude could not be spawned (is it installed and on PATH?)'
       : `claude exited with code ${result.exitCode}`;
-  if (!/^VERDICT: PASS\s*$/m.test(logTail(logPath, 50)))
-    return 'claude finished without printing `VERDICT: PASS` (treated as a failed verification)';
+  const verdicts = logTail(logPath, Number.MAX_SAFE_INTEGER)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^VERDICT: (PASS|FAIL)\b/.test(l));
+  if (verdicts.at(-1) !== 'VERDICT: PASS')
+    return 'claude finished without a final `VERDICT: PASS` line (treated as a failed verification)';
   return null;
 }
 
