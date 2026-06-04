@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -116,6 +116,28 @@ describe('runTick', () => {
 
     expect(await runTick({ config, linear, paths })).toBe('failure');
     expect(linear.issues.get('issue-1')!.comments.at(-1)).toContain('timed out');
+  });
+
+  it('downloads ticket images and hands them to claude as local files', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    const url = 'https://uploads.linear.app/abc/shot.png';
+    linear.images.set(url, Buffer.from('fake-png-bytes'));
+    linear.add(makeTicket({ description: `Make it look like ![shot](${url})` }));
+    const paths = makePaths();
+    const config = makeConfig(workspace, 'unused-command');
+
+    let prompt = '';
+    const run = async (opts: { prompt: string }): Promise<{ exitCode: number; timedOut: boolean }> => {
+      prompt = opts.prompt;
+      return { exitCode: 1, timedOut: false }; // fail fast; we only care about the prompt
+    };
+    await runTick({ config, linear, paths, run: run as never });
+
+    expect(prompt).toContain('Attached images');
+    expect(prompt).not.toContain('uploads.linear.app'); // rewritten to a local path
+    const imagePath = prompt.match(/^- (\/.+image-1\.png)$/m)![1];
+    expect(readFileSync(imagePath, 'utf8')).toBe('fake-png-bytes');
   });
 
   it('workspace prep failure: ticket goes back to Todo, never stuck In Progress', async () => {

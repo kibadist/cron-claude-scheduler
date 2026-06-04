@@ -26,8 +26,15 @@ export function makeTicket(over: Partial<TicketInfo> = {}): TicketInfo {
 export class FakeLinear implements LinearGateway {
   readonly issues = new Map<string, FakeIssue>();
 
+  /** url -> image bytes served by downloadImage; unknown urls return null */
+  readonly images = new Map<string, Buffer>();
+
   add(ticket: TicketInfo, status = 'Todo'): void {
     this.issues.set(ticket.id, { ticket, status, comments: [] });
+  }
+
+  async downloadImage(url: string): Promise<Buffer | null> {
+    return this.images.get(url) ?? null;
   }
 
   async fetchTodoIssues(projectNames: string[], todoStatus: string): Promise<TicketInfo[]> {

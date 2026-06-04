@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { prepareTicketAssets } from './assets.js';
 import type { Config, ProjectConfig, TicketInfo } from './types.js';
 import type { LinearGateway } from './linear.js';
 import { acquireLock, releaseLock } from './lock.js';
@@ -83,9 +84,14 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
       // earlier would let a third party's concurrent push masquerade as the
       // agent's work.
       const preRunSha = project.gitFlow === 'main-push' ? worktreeHeadSha(worktree) : '';
+      // Ticket images live OUTSIDE the worktree so the agent can't accidentally
+      // commit them; claude reads them via absolute paths.
+      const assets = await prepareTicketAssets(ticket, join(dirname(worktree), 'assets'), (url) =>
+        linear.downloadImage(url),
+      );
       const result = await run({
         command: config.claude.command,
-        prompt: buildPrompt(ticket, project, branch),
+        prompt: buildPrompt(assets.ticket, project, branch, assets.imagePaths),
         cwd: worktree,
         timeoutMs: config.claude.timeoutMinutes * 60_000,
         logPath,
@@ -225,9 +231,12 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     let worktree: string | undefined;
     try {
       worktree = addVerifyWorktree(project.path, branch);
+      const assets = await prepareTicketAssets(ticket, join(dirname(worktree), 'assets'), (url) =>
+        linear.downloadImage(url),
+      );
       const result = await run({
         command: config.claude.command,
-        prompt: buildVerifyPrompt(ticket, branch),
+        prompt: buildVerifyPrompt(assets.ticket, branch, assets.imagePaths),
         cwd: worktree,
         timeoutMs: config.claude.timeoutMinutes * 60_000,
         logPath,

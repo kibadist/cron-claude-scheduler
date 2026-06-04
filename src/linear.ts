@@ -7,6 +7,8 @@ export interface LinearGateway {
   moveIssue(issueId: string, statusName: string): Promise<void>;
   addComment(issueId: string, body: string): Promise<void>;
   getUpdatedAt(issueId: string): Promise<string>;
+  /** Fetch a private Linear upload (uploads.linear.app); null on any failure. */
+  downloadImage(url: string): Promise<Buffer | null>;
 }
 
 const NO_PRIORITY = 0;
@@ -20,9 +22,26 @@ export function compareTickets(a: TicketInfo, b: TicketInfo): number {
 
 export class LinearApi implements LinearGateway {
   private readonly client: LinearClient;
+  private readonly apiKey: string;
 
   constructor(apiKey: string) {
     this.client = new LinearClient({ apiKey });
+    this.apiKey = apiKey;
+  }
+
+  async downloadImage(url: string): Promise<Buffer | null> {
+    try {
+      // Linear uploads are private and need the API key — never send it anywhere else.
+      if (new URL(url).hostname !== 'uploads.linear.app') return null;
+      const res = await fetch(url, {
+        headers: { Authorization: this.apiKey },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!res.ok) return null;
+      return Buffer.from(await res.arrayBuffer());
+    } catch {
+      return null;
+    }
   }
 
   async fetchTodoIssues(projectNames: string[], todoStatus: string): Promise<TicketInfo[]> {

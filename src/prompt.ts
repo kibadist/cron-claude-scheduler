@@ -56,7 +56,24 @@ ${ticket.description || '_no description provided_'}
 ${comments}`;
 }
 
-export function buildPrompt(ticket: TicketInfo, project: ProjectConfig, branch: string): string {
+function imagesSection(imagePaths: string[]): string {
+  if (imagePaths.length === 0) return '';
+  return `
+## Attached images
+
+The ticket includes ${imagePaths.length} image(s), already downloaded locally.
+View each one with the Read tool BEFORE starting — they are part of the requirements:
+
+${imagePaths.map((p) => `- ${p}`).join('\n')}
+`;
+}
+
+export function buildPrompt(
+  ticket: TicketInfo,
+  project: ProjectConfig,
+  branch: string,
+  imagePaths: string[] = [],
+): string {
   return `You are working autonomously on a Linear ticket.
 
 You are in a TEMPORARY, DISPOSABLE workspace (a git worktree created for this
@@ -64,6 +81,7 @@ ticket). The user's main checkout lives elsewhere — this directory will be
 deleted after you finish, so anything you don't push is lost.
 
 ${ticketSection(ticket)}
+${imagesSection(imagePaths)}
 
 ## Required workflow
 
@@ -77,7 +95,7 @@ ${gitFlowInstructions(project, branch)}
 `;
 }
 
-export function buildVerifyPrompt(ticket: TicketInfo, branch: string): string {
+export function buildVerifyPrompt(ticket: TicketInfo, branch: string, imagePaths: string[] = []): string {
   return `You are verifying completed work for a Linear ticket.
 
 You are in a TEMPORARY, DISPOSABLE verification workspace (a git worktree
@@ -86,6 +104,7 @@ user's main checkout lives elsewhere — this directory will be deleted after
 you finish.
 
 ${ticketSection(ticket)}
+${imagesSection(imagePaths)}
 
 ## Required workflow
 
