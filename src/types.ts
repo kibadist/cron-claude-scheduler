@@ -16,6 +16,8 @@ export interface StatusConfig {
   todo: string;
   inProgress: string;
   inReview: string;
+  /** target status after a successful verification run (defaults to "Done") */
+  done: string;
 }
 
 export interface Config {

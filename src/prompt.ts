@@ -40,14 +40,12 @@ function gitFlowInstructions(project: ProjectConfig, branch: string): string {
   }
 }
 
-export function buildPrompt(ticket: TicketInfo, project: ProjectConfig, branch: string): string {
+function ticketSection(ticket: TicketInfo): string {
   const comments = ticket.comments.length
     ? ticket.comments.map((c) => `**${c.author}:** ${c.body}`).join('\n\n')
     : '_none_';
 
-  return `You are working autonomously on a Linear ticket in this repository.
-
-# Ticket ${ticket.identifier}: ${ticket.title}
+  return `# Ticket ${ticket.identifier}: ${ticket.title}
 
 ## Description
 
@@ -55,7 +53,13 @@ ${ticket.description || '_no description provided_'}
 
 ## Comments
 
-${comments}
+${comments}`;
+}
+
+export function buildPrompt(ticket: TicketInfo, project: ProjectConfig, branch: string): string {
+  return `You are working autonomously on a Linear ticket in this repository.
+
+${ticketSection(ticket)}
 
 ## Required workflow
 
@@ -66,5 +70,35 @@ ${gitFlowInstructions(project, branch)}
 - You are unattended: do NOT ask questions. Make reasonable decisions and note them in commit messages.
 - Run the project's existing test and lint commands before pushing; do not push failing work.
 - If you cannot complete the task, do NOT push anything — explain the blocker in your final message and stop.
+`;
+}
+
+export function buildVerifyPrompt(ticket: TicketInfo, branch: string): string {
+  return `You are verifying completed work for a Linear ticket.
+
+You are in a TEMPORARY, DISPOSABLE verification workspace (a git worktree
+already checked out at \`${branch}\`, the branch containing the work). The
+user's main checkout lives elsewhere — this directory will be deleted after
+you finish.
+
+${ticketSection(ticket)}
+
+## Required workflow
+
+1. Install dependencies if the project needs them to run (npm/pnpm/yarn install).
+2. Use the /verify skill: run the app locally and verify IN THE BROWSER that every
+   requirement of this ticket actually works. Exercise the real behavior — reading
+   the code is not verification.
+3. Shut down any app/server processes you started.
+4. End your final message with exactly one verdict line:
+   - \`VERDICT: PASS\` — only if you observed every requirement working
+   - \`VERDICT: FAIL — <short reason>\` — otherwise
+
+## Rules
+
+- You are unattended: do NOT ask questions.
+- This is a read-only review: do NOT commit, push, or change the ticket's code.
+  (Throwaway local edits needed to run the app, e.g. an .env file, are fine.)
+- Be skeptical: anything you could not actually observe working is a FAIL, not a PASS.
 `;
 }

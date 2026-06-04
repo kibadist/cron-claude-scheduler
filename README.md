@@ -89,6 +89,7 @@ From then on: write a ticket, move it to **Todo**, review the PR that appears.
 | `claude.command` | The Claude Code binary (usually just `claude`) |
 | `claude.timeoutMinutes` | A run exceeding this is killed and reported as a failure |
 | `statuses.todo` / `inProgress` / `inReview` | Workflow state **names** in your Linear team (case-insensitive) |
+| `statuses.done` | Target status after a successful verification run (optional, default `"Done"`) |
 | `projects[].linearProject` | Linear project name (case-insensitive; must be unique in the list) |
 | `projects[].path` | Absolute path to the local git workspace for that project |
 | `projects[].gitFlow` | `branch-pr` \| `branch-push` \| `main-push` (see below) |
@@ -120,14 +121,30 @@ Config is validated on startup with specific error messages (missing path, not a
 
 | Command | What it does |
 |---|---|
-| `npm run tick` | Run exactly one tick in the foreground |
-| `npm run loop` | Run continuously in a terminal (any OS; safe alongside launchd — the lockfile prevents overlap) |
+| `npm run tick` | Run exactly one work tick in the foreground |
+| `npm run loop` | Run work ticks continuously in a terminal (any OS; safe alongside launchd — the lockfile prevents overlap) |
+| `npm run review` | Run one **verification tick** (see below) |
+| `npm run review:loop` | Run verification ticks continuously |
 | `npm run watch` | Live-tail the active ticket's run log, auto-switching between runs |
 | `npm run install-agent` | Install + start the launchd agent (ticks every `pollIntervalMinutes`, survives reboots) |
 | `npm run uninstall-agent` | Stop and remove the launchd agent |
 | `npm test` | Run the test suite |
 
-Logs: `logs/<TICKET>-<timestamp>.log` per run, `logs/launchd.log` for the scheduler itself.
+Logs: `logs/<TICKET>-<timestamp>.log` per work run, `logs/<TICKET>-verify-<timestamp>.log` per verification run, `logs/launchd.log` for the scheduler itself.
+
+## Verification mode (`npm run review`)
+
+The second half of the loop: instead of you reviewing every In Review ticket by hand, a verification agent checks the work **in the browser** and closes the ticket.
+
+For each **In Review** ticket whose `claude/…` branch exists on origin (tickets a human moved to In Review are left alone), the scheduler:
+
+1. Creates a **disposable git worktree** of the branch in a temp directory — your main checkout is never touched
+2. Runs Claude there with the `/verify` skill: install deps, start the app locally, and verify each requirement of the ticket by exercising the real behavior in the browser
+3. Requires a machine-readable `VERDICT: PASS` as the agent's final line — **fail-closed**: no marker, FAIL marker, timeout, or non-zero exit all count as failure
+4. **PASS** → ticket moves to **Done** with a verification report comment; the PR stays open — merging remains your call
+5. **FAIL** → 🤖 comment with the findings on the Linear ticket **and on the PR** (`gh pr comment`); the ticket stays In Review and is skipped until you touch it — or move it back to Todo to have the work agent fix the findings
+
+Work ticks and verification ticks share the same lockfile, so they never run simultaneously. Run `npm run review` on demand, `npm run review:loop` in a terminal, or wire a second launchd agent if you want it fully automatic.
 
 ## Safety notes
 

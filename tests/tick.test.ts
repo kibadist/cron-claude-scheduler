@@ -24,7 +24,7 @@ function makeConfig(workspace: string, claudeCommand: string, gitFlow: GitFlow =
   return {
     pollIntervalMinutes: 1,
     claude: { command: claudeCommand, timeoutMinutes: 1 },
-    statuses: { todo: 'Todo', inProgress: 'In Progress', inReview: 'In Review' },
+    statuses: { todo: 'Todo', inProgress: 'In Progress', inReview: 'In Review', done: 'Done' },
     projects: [{ linearProject: 'Test Project', path: workspace, gitFlow, baseBranch: 'main' }],
   };
 }

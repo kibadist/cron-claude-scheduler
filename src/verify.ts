@@ -20,6 +20,17 @@ export function remoteHeadSha(cwd: string, branch: string): string {
   return out.split('\t')[0] ?? '';
 }
 
+/** Post a comment on the branch's PR. Best-effort: returns false when there is
+ * no PR, gh is missing/unauthenticated, or the repo is not on GitHub. */
+export function commentOnPr(cwd: string, branch: string, body: string): boolean {
+  try {
+    execFileSync('gh', ['pr', 'comment', branch, '--body', body], { cwd, encoding: 'utf8' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function prUrlForBranch(cwd: string, branch: string): string | null {
   try {
     const out = execFileSync('gh', ['pr', 'view', branch, '--json', 'url', '--jq', '.url'], {

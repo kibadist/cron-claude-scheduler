@@ -45,6 +45,9 @@ export function validateConfig(raw: unknown): Config {
     if (typeof statuses[key] !== 'string' || (statuses[key] as string).length === 0)
       fail(`statuses.${key} must be a non-empty string`);
   }
+  // Optional with a default so configs written before review mode keep working.
+  if (statuses.done !== undefined && (typeof statuses.done !== 'string' || statuses.done.length === 0))
+    fail('statuses.done must be a non-empty string when set');
 
   if (!Array.isArray(c.projects) || c.projects.length === 0)
     fail('projects must be a non-empty array');
@@ -61,6 +64,7 @@ export function validateConfig(raw: unknown): Config {
       todo: statuses.todo as string,
       inProgress: statuses.inProgress as string,
       inReview: statuses.inReview as string,
+      done: (statuses.done as string | undefined) ?? 'Done',
     },
     projects,
   };

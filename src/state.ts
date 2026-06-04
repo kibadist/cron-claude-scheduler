@@ -4,6 +4,12 @@ export interface ActiveTicket {
   issueId: string;
   identifier: string;
   startedAt: string;
+  /**
+   * 'work' runs move the ticket to In Progress and must be moved back to Todo
+   * if interrupted; 'review' runs never change the status, so an interrupted
+   * one just clears. Absent in state files written before review mode existed.
+   */
+  mode?: 'work' | 'review';
 }
 
 export interface SchedulerState {

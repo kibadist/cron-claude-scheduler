@@ -7,7 +7,8 @@
   "statuses": {
     "todo": "Todo",
     "inProgress": "In Progress",
-    "inReview": "In Review"
+    "inReview": "In Review",
+    "done": "Done"
   },
   "projects": [
     {

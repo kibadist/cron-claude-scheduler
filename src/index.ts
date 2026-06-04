@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ConfigError, loadConfig, requireApiKey } from './config.js';
 import { LinearApi } from './linear.js';
-import { runTick } from './tick.js';
+import { runReviewTick, runTick } from './tick.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -20,11 +20,13 @@ async function main(): Promise<void> {
 
   const log = (msg: string): void => console.log(`[${new Date().toISOString()}] ${msg}`);
   const loop = process.argv.includes('--loop');
+  const review = process.argv.includes('--review');
+  const tick = review ? runReviewTick : runTick;
 
   do {
-    log(`tick starting (pid ${process.pid})`);
-    const outcome = await runTick({ config, linear, paths, log });
-    log(`tick: ${outcome}`);
+    log(`${review ? 'review tick' : 'tick'} starting (pid ${process.pid})`);
+    const outcome = await tick({ config, linear, paths, log });
+    log(`${review ? 'review tick' : 'tick'}: ${outcome}`);
     if (loop) await sleep(config.pollIntervalMinutes * 60_000);
   } while (loop);
 }
