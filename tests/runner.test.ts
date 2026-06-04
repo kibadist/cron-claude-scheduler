@@ -61,6 +61,18 @@ describe('runClaude', () => {
     expect(result.exitCode).toBeNull();
     expect(result.timedOut).toBe(false);
   });
+
+  it('resolves instead of crashing when the log path is unwritable', async () => {
+    const result = await runClaude({
+      command: join(FIXTURES, 'fake-claude-ok.sh'),
+      prompt: '',
+      cwd: dir,
+      timeoutMs: 10_000,
+      logPath: join(dir, 'no-such-dir', 'run.log'),
+    });
+    expect(result.exitCode).toBeNull();
+    expect(result.timedOut).toBe(false);
+  });
 });
 
 describe('logTail', () => {

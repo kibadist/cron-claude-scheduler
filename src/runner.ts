@@ -25,10 +25,12 @@ export function runClaude(opts: RunOptions): Promise<RunResult> {
 
     let timedOut = false;
     let settled = false;
+    let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (result: RunResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
+      clearTimeout(sigkillTimer);
       log.end();
       resolve(result);
     };
@@ -36,8 +38,15 @@ export function runClaude(opts: RunOptions): Promise<RunResult> {
     const killTimer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 10_000).unref();
+      sigkillTimer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+      sigkillTimer.unref();
     }, opts.timeoutMs);
+
+    // A bad logPath or full disk must fail the run, not crash the scheduler.
+    log.on('error', () => {
+      child.kill('SIGKILL');
+      finish({ exitCode: null, timedOut: false });
+    });
 
     child.stdout.on('data', (d: Buffer) => log.write(d));
     child.stderr.on('data', (d: Buffer) => log.write(d));
