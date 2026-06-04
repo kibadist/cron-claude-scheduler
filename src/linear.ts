@@ -39,6 +39,7 @@ export class LinearApi implements LinearGateway {
       const project = await issue.project;
       if (!project) continue;
 
+      // TODO: paginate if a ticket ever has more than the SDK's default page of comments
       const commentsConn = await issue.comments();
       const comments: TicketComment[] = [];
       for (const c of commentsConn.nodes) {
