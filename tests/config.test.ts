@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -90,6 +90,13 @@ describe('loadConfig', () => {
 });
 
 describe('requireApiKey', () => {
+  const original = process.env.LINEAR_API_KEY;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.LINEAR_API_KEY;
+    else process.env.LINEAR_API_KEY = original;
+  });
+
   it('throws when LINEAR_API_KEY is unset', () => {
     delete process.env.LINEAR_API_KEY;
     expect(() => requireApiKey()).toThrow(/LINEAR_API_KEY/);
