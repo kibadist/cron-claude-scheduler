@@ -11,14 +11,14 @@
   },
   "projects": [
     {
-      "linearProject": "Kibadist Knowledge",
-      "path": "/Users/kibadist/Code/kibadist-knowledge",
+      "linearProject": "My Web App",
+      "path": "/Users/you/Code/my-web-app",
       "gitFlow": "branch-pr",
       "baseBranch": "main"
     },
     {
-      "linearProject": "Detailing App",
-      "path": "/Users/kibadist/Code/detailingApp/detailing-app",
+      "linearProject": "My Mobile App",
+      "path": "/Users/you/Code/my-mobile-app",
       "gitFlow": "branch-push",
       "baseBranch": "main"
     }

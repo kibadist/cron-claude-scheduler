@@ -6,3 +6,4 @@ config.json
 .state.json
 .scheduler.lock
 .omc/
+.claude/
