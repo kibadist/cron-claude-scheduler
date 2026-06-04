@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,5 +137,69 @@ describe('runTick', () => {
     const issue = linear.issues.get('issue-1')!;
     expect(issue.comments[0]).toContain('interrupted');
     expect(issue.status).toBe('In Review');
+  });
+
+  it('recovers a claim-phase crash: active set but ticket never left Todo', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    // The crash happened AFTER saveState but BEFORE moveIssue, so the ticket is
+    // still in Todo in Linear even though state.active points at it.
+    linear.add(makeTicket(), 'Todo');
+    const paths = makePaths();
+    saveState(paths.state, {
+      active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z' },
+      skips: {},
+    });
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
+
+    const outcome = await runTick({ config, linear, paths });
+
+    expect(outcome).toBe('success');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.comments[0]).toContain('interrupted'); // recovery fired harmlessly
+    expect(issue.status).toBe('In Review'); // then continued and succeeded
+  });
+
+  it('releases the lock and stays recoverable when the gateway throws mid-tick', async () => {
+    const { workspace } = makeRepoPair();
+    // Throws only on the In Review move, i.e. after the claim has been persisted.
+    class ThrowingLinear extends FakeLinear {
+      throwOnReview = true;
+      async moveIssue(issueId: string, statusName: string): Promise<void> {
+        if (this.throwOnReview && statusName === 'In Review') {
+          throw new Error('Linear API exploded');
+        }
+        await super.moveIssue(issueId, statusName);
+      }
+    }
+    const linear = new ThrowingLinear();
+    linear.add(makeTicket());
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
+
+    await expect(runTick({ config, linear, paths })).rejects.toThrow('Linear API exploded');
+
+    // The lock must have been released despite the throw.
+    expect(existsSync(paths.lock)).toBe(false);
+    expect(acquireLock(paths.lock)).toBe(true);
+    // (re-release so the next runTick can take it)
+    const { releaseLock } = await import('../src/lock.js');
+    releaseLock(paths.lock);
+
+    // The ticket is now stuck In Progress with active still persisted.
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('In Progress');
+
+    // Second tick with a healthy gateway recovers it. The branch already exists
+    // on origin from the first run, so fake-claude-push.sh would fail to
+    // re-create it — use fake-claude-fail.sh and accept a 'failure' outcome.
+    // What matters is that recovery fired and the ticket left In Progress.
+    linear.throwOnReview = false;
+    const recoverConfig = makeConfig(workspace, join(FIXTURES, 'fake-claude-fail.sh'));
+
+    await runTick({ config: recoverConfig, linear, paths });
+
+    expect(issue.comments.some((c: string) => c.includes('interrupted'))).toBe(true);
+    expect(issue.status).not.toBe('In Progress');
   });
 });

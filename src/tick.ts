@@ -62,13 +62,18 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
       project.gitFlow === 'main-push' ? remoteHeadSha(project.path, project.baseBranch) : '';
 
     log(`working ${ticket.identifier} in ${project.path}`);
-    await linear.moveIssue(ticket.id, config.statuses.inProgress);
+    // Persist the claim BEFORE moving the ticket in Linear. A crash in this
+    // window leaves `active` set with the ticket still in Todo, so the next
+    // tick's recovery fires harmlessly (Todo→Todo) and the ticket stays
+    // eligible. The reverse order would orphan the ticket In Progress with no
+    // persisted `active`, so recovery would never fire.
     state.active = {
       issueId: ticket.id,
       identifier: ticket.identifier,
       startedAt: new Date().toISOString(),
     };
     saveState(paths.state, state);
+    await linear.moveIssue(ticket.id, config.statuses.inProgress);
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const logPath = join(paths.logsDir, `${ticket.identifier}-${stamp}.log`);
