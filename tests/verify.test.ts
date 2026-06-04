@@ -90,4 +90,12 @@ describe('verifyWork', () => {
     const changed = verifyWork(project(workspace, 'main-push'), 'unused', preSha);
     expect(changed.ok).toBe(true);
   });
+
+  it('reports a soft failure instead of throwing when the remote is unreachable', () => {
+    const { workspace } = makeRepoPair();
+    git(workspace, 'remote', 'set-url', 'origin', '/nonexistent/origin.git');
+    const result = verifyWork(project(workspace, 'branch-push'), 'claude/kib-1-test', '');
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('could not verify');
+  });
 });

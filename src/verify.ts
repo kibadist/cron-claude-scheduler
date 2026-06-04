@@ -33,6 +33,16 @@ export function prUrlForBranch(cwd: string, branch: string): string | null {
 }
 
 export function verifyWork(project: ProjectConfig, branch: string, preRunSha: string): VerifyResult {
+  // A network hiccup or auth failure during ls-remote must surface as a soft
+  // verification failure on the ticket, never crash the scheduler.
+  try {
+    return verifyWorkUnsafe(project, branch, preRunSha);
+  } catch (e) {
+    return { ok: false, detail: `could not verify push (git error): ${(e as Error).message}` };
+  }
+}
+
+function verifyWorkUnsafe(project: ProjectConfig, branch: string, preRunSha: string): VerifyResult {
   switch (project.gitFlow) {
     case 'branch-push': {
       if (!remoteBranchExists(project.path, branch))
