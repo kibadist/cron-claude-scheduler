@@ -22,6 +22,7 @@ async function main(): Promise<void> {
   const loop = process.argv.includes('--loop');
 
   do {
+    log(`tick starting (pid ${process.pid})`);
     const outcome = await runTick({ config, linear, paths, log });
     log(`tick: ${outcome}`);
     if (loop) await sleep(config.pollIntervalMinutes * 60_000);
