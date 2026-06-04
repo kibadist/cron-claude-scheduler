@@ -87,6 +87,19 @@ describe('loadConfig', () => {
   it('rejects an empty projects array', () => {
     expect(() => loadConfig(writeConfig({ projects: [] }))).toThrow(/non-empty array/);
   });
+
+  it('rejects duplicate linearProject names (case-insensitive)', () => {
+    expect(() =>
+      loadConfig(
+        writeConfig({
+          projects: [
+            { linearProject: 'Same', path: workspace, gitFlow: 'branch-push', baseBranch: 'main' },
+            { linearProject: 'same', path: workspace, gitFlow: 'branch-pr', baseBranch: 'main' },
+          ],
+        }),
+      ),
+    ).toThrow(/duplicate linearProject/);
+  });
 });
 
 describe('requireApiKey', () => {

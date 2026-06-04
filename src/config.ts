@@ -50,6 +50,10 @@ export function validateConfig(raw: unknown): Config {
     fail('projects must be a non-empty array');
   const projects = (c.projects as unknown[]).map((p, i) => validateProject(p, i));
 
+  const names = projects.map((p) => p.linearProject.toLowerCase());
+  const dup = names.find((n, i) => names.indexOf(n) !== i);
+  if (dup) fail(`projects contains duplicate linearProject name: ${dup}`);
+
   return {
     pollIntervalMinutes: c.pollIntervalMinutes,
     claude: { command: claude.command as string, timeoutMinutes: claude.timeoutMinutes as number },
