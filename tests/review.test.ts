@@ -212,15 +212,38 @@ describe('runReviewTick', () => {
     expect(loadState(paths.state).branches).toEqual({});
   });
 
-  it('ignores In Review tickets whose branch is not on origin', async () => {
-    const { workspace } = makeRepoPair(); // no branch pushed
+  it('no branch on origin: verifies the tip of the base branch instead', async () => {
+    const { workspace } = makeRepoPair(); // no claude/ branch pushed (e.g. main-push flow)
     const linear = new FakeLinear();
     linear.add(makeTicket(), 'In Review');
     const paths = makePaths();
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
+    config.projects[0].mergeOnVerified = true; // must be ignored: nothing to merge
 
-    expect(await runReviewTick({ config, linear, paths })).toBe('idle');
-    expect(linear.issues.get('issue-1')!.status).toBe('In Review'); // untouched
+    let mergeCalled = false;
+    const merge = (): { ok: boolean; detail: string } => {
+      mergeCalled = true;
+      return { ok: true, detail: 'should not happen' };
+    };
+
+    expect(await runReviewTick({ config, linear, paths, merge })).toBe('success');
+    expect(mergeCalled).toBe(false);
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('Done');
+    expect(issue.comments.at(-1)).toContain('no PR branch');
+  });
+
+  it('no branch on origin: a failed base-branch verification stays In Review', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-fail.sh'));
+
+    expect(await runReviewTick({ config, linear, paths })).toBe('failure');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('In Review');
+    expect(issue.comments.at(-1)).toContain('save button broken');
   });
 
   it('recovers silently from an interrupted review run and retries', async () => {

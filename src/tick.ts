@@ -195,9 +195,13 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     }
     if (pruned) saveState(paths.state, state);
 
-    // Only verify tickets the scheduler actually worked: their branch must be
-    // on origin. Tickets a human moved to In Review are left alone.
-    let picked: { ticket: TicketInfo; project: ProjectConfig; branch: string } | undefined;
+    // Verify against the ticket's PR branch when it exists on origin;
+    // otherwise fall back to the tip of the base branch — the work is
+    // expected to already live there (main-push flow, or a PR that was
+    // merged and its branch deleted manually).
+    let picked:
+      | { ticket: TicketInfo; project: ProjectConfig; branch: string; onBase: boolean }
+      | undefined;
     for (const ticket of eligible) {
       const project = config.projects.find(
         (p) => p.linearProject.toLowerCase() === ticket.projectName.toLowerCase(),
@@ -206,18 +210,18 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       // Prefer the branch recorded by the work run — it survives title edits.
       const branch = state.branches[ticket.id] ?? branchName(ticket.identifier, ticket.title);
       try {
-        if (remoteBranchExists(project.path, branch)) {
-          picked = { ticket, project, branch };
-          break;
-        }
+        picked = remoteBranchExists(project.path, branch)
+          ? { ticket, project, branch, onBase: false }
+          : { ticket, project, branch: project.baseBranch, onBase: true };
+        break;
       } catch (e) {
         log(`could not check origin for ${ticket.identifier}: ${(e as Error).message}`);
       }
     }
     if (!picked) return 'idle';
-    const { ticket, project, branch } = picked;
+    const { ticket, project, branch, onBase } = picked;
 
-    log(`verifying ${ticket.identifier} (${branch})`);
+    log(`verifying ${ticket.identifier} (${onBase ? `tip of ${branch}` : branch})`);
     state.active = {
       issueId: ticket.id,
       identifier: ticket.identifier,
@@ -238,7 +242,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       );
       const result = await run({
         command: config.claude.command,
-        prompt: buildVerifyPrompt(assets.ticket, branch, assets.imagePaths),
+        prompt: buildVerifyPrompt(assets.ticket, branch, assets.imagePaths, onBase),
         cwd: worktree,
         timeoutMs: config.claude.timeoutMinutes * 60_000,
         logPath,
@@ -254,7 +258,9 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       // Auto-merge before touching the ticket: a failed merge must leave the
       // ticket In Review with an actionable comment, not half-finished.
       let mergeNote = '';
-      if (project.mergeOnVerified) {
+      if (onBase) {
+        mergeNote = `verified on \`${branch}\` (no PR branch — the work is already on the base branch)`;
+      } else if (project.mergeOnVerified) {
         const merged = (deps.merge ?? mergePr)(project.path, branch);
         if (!merged.ok) {
           const body = [
@@ -301,7 +307,8 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
 
     const body = verifyFailureComment(detail, logTail(logPath));
     await linear.addComment(ticket.id, body);
-    if (!commentOnPr(project.path, branch, body)) {
+    // Base-branch verifications have no PR to comment on.
+    if (!onBase && !commentOnPr(project.path, branch, body)) {
       log(`could not comment on the PR for ${branch} (no PR or gh unavailable)`);
     }
     // Ticket stays In Review. Re-fetch updatedAt AFTER our writes so our own

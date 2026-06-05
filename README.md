@@ -145,15 +145,15 @@ Logs: `logs/<TICKET>-<timestamp>.log` per work run, `logs/<TICKET>-verify-<times
 
 The second half of the loop: instead of you reviewing every In Review ticket by hand, a verification agent checks the work **in the browser** and closes the ticket. The default tick does this automatically whenever the Todo queue is empty; `npm run review` forces a verification-only tick.
 
-For each **In Review** ticket whose `claude/…` branch exists on origin (tickets a human moved to In Review are left alone), the scheduler:
+For each **In Review** ticket, the scheduler:
 
-1. Creates a **disposable git worktree** of the branch in a temp directory — your main checkout is never touched
+1. Creates a **disposable git worktree** in a temp directory — of the ticket's `claude/…` branch when it exists on origin, otherwise of the **tip of `baseBranch`** (where the work should already live: `main-push` flow, or a PR merged manually). Your main checkout is never touched
 2. Runs Claude there with the `/verify` skill: install deps, start the app locally, and verify each requirement of the ticket by exercising the real behavior in the browser
 3. Requires a machine-readable `VERDICT: PASS` as the agent's final line — **fail-closed**: no marker, FAIL marker, timeout, or non-zero exit all count as failure
 4. **PASS** → ticket moves to **Done** with a verification report comment. With `mergeOnVerified: true` the PR is **squash-merged automatically first** (fail-closed: a merge conflict keeps the ticket In Review with an actionable comment); otherwise the PR stays open and merging remains your call
 5. **FAIL** → 🤖 comment with the findings on the Linear ticket **and on the PR** (`gh pr comment`); the ticket stays In Review and is skipped until you touch it — or move it back to Todo to have the work agent fix the findings
 
-With `mergeOnVerified` the loop is fully autonomous: code reaches `main` only after a passing browser verification, failures stay isolated on their branches, and your only job is writing tickets. Note: `main-push` projects skip verification entirely (there is no branch to verify) — their tickets wait in In Review for you.
+With `mergeOnVerified` the loop is fully autonomous: code reaches `main` only after a passing browser verification, failures stay isolated on their branches, and your only job is writing tickets. Tickets without a PR branch (`main-push`, manually merged PRs) are verified against the base branch tip — the verifier is told the work should already be merged there, and its absence is a FAIL.
 
 Work ticks and verification ticks share the same lockfile, so they never run simultaneously — and the default tick already alternates between them, so the single launchd agent drives the entire Todo → In Review → Done loop with no extra setup.
 

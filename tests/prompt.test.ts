@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { branchName, buildPrompt } from '../src/prompt.js';
+import { branchName, buildPrompt, buildVerifyPrompt } from '../src/prompt.js';
 import type { ProjectConfig, TicketInfo } from '../src/types.js';
 
 function makeTicket(over: Partial<TicketInfo> = {}): TicketInfo {
@@ -71,5 +71,14 @@ describe('buildPrompt', () => {
   it('tells main-push to work on the base branch', () => {
     const prompt = buildPrompt(makeTicket(), makeProject({ gitFlow: 'main-push', baseBranch: 'main' }), 'unused');
     expect(prompt).toContain('git push origin HEAD:main');
+  });
+
+  it('verify prompt explains the base-branch case when there is no PR branch', () => {
+    const onBranch = buildVerifyPrompt(makeTicket(), 'claude/kib-12-x', [], false);
+    expect(onBranch).toContain('the branch containing the work');
+
+    const onBase = buildVerifyPrompt(makeTicket(), 'main', [], true);
+    expect(onBase).toContain('ALREADY be merged into `main`');
+    expect(onBase).toContain('that is a FAIL');
   });
 });

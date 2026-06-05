@@ -95,13 +95,25 @@ ${gitFlowInstructions(project, branch)}
 `;
 }
 
-export function buildVerifyPrompt(ticket: TicketInfo, branch: string, imagePaths: string[] = []): string {
+export function buildVerifyPrompt(
+  ticket: TicketInfo,
+  ref: string,
+  imagePaths: string[] = [],
+  onBase = false,
+): string {
+  const workspaceNote = onBase
+    ? `You are in a TEMPORARY, DISPOSABLE verification workspace (a git worktree
+checked out at the tip of \`${ref}\`). This ticket has no PR branch — its work
+is expected to ALREADY be merged into \`${ref}\`. If the required behavior is
+absent there, that is a FAIL.`
+    : `You are in a TEMPORARY, DISPOSABLE verification workspace (a git worktree
+already checked out at \`${ref}\`, the branch containing the work). The
+user's main checkout lives elsewhere — this directory will be deleted after
+you finish.`;
+
   return `You are verifying completed work for a Linear ticket.
 
-You are in a TEMPORARY, DISPOSABLE verification workspace (a git worktree
-already checked out at \`${branch}\`, the branch containing the work). The
-user's main checkout lives elsewhere — this directory will be deleted after
-you finish.
+${workspaceNote}
 
 ${ticketSection(ticket)}
 ${imagesSection(imagePaths)}
