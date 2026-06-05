@@ -30,10 +30,36 @@ async function main(): Promise<void> {
 
   do {
     log(`${label} starting (pid ${process.pid})`);
-    const outcome = await tick({ config, linear, paths, log });
-    log(`${label}: ${outcome}`);
+    try {
+      const outcome = await tick({ config, linear, paths, log });
+      log(`${label}: ${outcome}`);
+    } catch (err) {
+      // A transient Linear/network error must not kill the loop (or spew a
+      // GraphQL stack): the tick released its lock in `finally`, any claimed
+      // ticket is recovered by the next tick, so retrying is always safe.
+      if (isTransientNetworkError(err)) {
+        log(`${label} failed: ${describeError(err)} — will retry next tick`);
+      } else {
+        console.error(err);
+        log(`${label} failed: ${describeError(err)} — will retry next tick`);
+      }
+      if (!loop) process.exitCode = 1;
+    }
     if (loop) await sleep(config.pollIntervalMinutes * 60_000);
   } while (loop);
+}
+
+function isTransientNetworkError(err: unknown): boolean {
+  const e = err as { type?: string; status?: number };
+  if (e?.type === 'NetworkError') return true; // @linear/sdk NetworkLinearError
+  return typeof e?.status === 'number' && (e.status === 429 || e.status >= 500);
+}
+
+function describeError(err: unknown): string {
+  const e = err as { status?: number; message?: string };
+  const status = typeof e?.status === 'number' ? ` (HTTP ${e.status})` : '';
+  const message = (e?.message ?? String(err)).split('\n')[0];
+  return `${message}${status}`;
 }
 
 main().catch((err: unknown) => {
