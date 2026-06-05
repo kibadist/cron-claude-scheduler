@@ -197,6 +197,23 @@ describe('runReviewTick', () => {
     expect(loadState(paths.state).branches['issue-1']).toBeUndefined(); // cleaned up
   });
 
+  it('usage limit during verification: pauses without blaming the ticket', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-limit.sh'));
+
+    expect(await runReviewTick({ config, linear, paths })).toBe('paused');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('In Review'); // untouched
+    expect(issue.comments).toHaveLength(0); // no failure comment
+    const state = loadState(paths.state);
+    expect(state.skips).toEqual({}); // will simply be retried after the cooldown
+    expect(state.pausedUntil! > new Date().toISOString()).toBe(true);
+  });
+
   it('evicts branch records for tickets that left In Review', async () => {
     const { workspace } = makeRepoPair();
     const linear = new FakeLinear(); // nothing In Review at all

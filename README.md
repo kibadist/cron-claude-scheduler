@@ -94,6 +94,7 @@ From then on: write a ticket, move it to **Todo**, and merge the PR once the tic
 | `pollIntervalMinutes` | How often a tick fires (positive integer) |
 | `claude.command` | The Claude Code binary (usually just `claude`) |
 | `claude.timeoutMinutes` | A run exceeding this is killed and reported as a failure |
+| `claude.limitCooldownMinutes` | Pause all ticks this long after claude hits a usage/rate limit (optional, default `30`) |
 | `statuses.todo` / `inProgress` / `inReview` | Workflow state **names** in your Linear team (case-insensitive) |
 | `statuses.done` | Target status after a successful verification run (optional, default `"Done"`) |
 | `projects[].linearProject` | Linear project name (case-insensitive; must be unique in the list) |
@@ -182,6 +183,7 @@ The two compose fine: use this for the local factory floor, and `/schedule` for 
 | `claude could not be spawned` comment on a ticket | `claude` isn't on the PATH launchd sees — re-run `npm run install-agent` (it bakes the current locations of `node`/`claude`/`gh` into the agent) |
 | `branch pushed but no PR was found` | `gh auth login`, or the repo's remote isn't on GitHub — switch that project to `branch-push` |
 | Ticket stuck skipped | That's by design after a failure — edit or comment on the ticket to re-queue it |
+| `paused until …` in the log | claude hit its usage/rate limit — the affected ticket went back to its queue untouched and ticks resume automatically after `limitCooldownMinutes` |
 | `Workflow state "…" not found` | Your Linear team uses different status names — set them in `statuses.*` |
 | Nothing happens after install | `tail -f logs/launchd.log`; confirm the plist loaded with `launchctl list \| grep claude-scheduler` |
 

@@ -3,9 +3,9 @@ import { prepareTicketAssets } from './assets.js';
 import type { Config, ProjectConfig, TicketInfo } from './types.js';
 import type { LinearGateway } from './linear.js';
 import { acquireLock, releaseLock } from './lock.js';
-import { isSkipped, loadState, saveState, type SchedulerState } from './state.js';
+import { isPaused, isSkipped, loadState, saveState, type SchedulerState } from './state.js';
 import { branchName, buildPrompt, buildVerifyPrompt } from './prompt.js';
-import { logTail, runClaude, type RunResult } from './runner.js';
+import { isLimitError, logTail, runClaude, type RunResult } from './runner.js';
 import { commentOnPr, mergePr, remoteBranchExists, verifyWork, type VerifyResult } from './verify.js';
 import {
   addVerifyWorktree,
@@ -15,7 +15,7 @@ import {
   worktreeHeadSha,
 } from './worktree.js';
 
-export type TickOutcome = 'locked' | 'idle' | 'success' | 'failure';
+export type TickOutcome = 'locked' | 'idle' | 'success' | 'failure' | 'paused';
 
 export interface TickPaths {
   lock: string;
@@ -43,6 +43,11 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
   try {
     const state = loadState(paths.state);
     await recoverInterrupted(state, deps);
+
+    if (isPaused(state)) {
+      log(`paused until ${state.pausedUntil} (claude usage limit)`);
+      return 'paused';
+    }
 
     const projectNames = config.projects.map((p) => p.linearProject);
     const issues = await linear.fetchTodoIssues(projectNames, config.statuses.todo);
@@ -123,6 +128,18 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
       return 'success';
     }
 
+    // A usage/rate limit is the account's problem, not the ticket's: put the
+    // ticket back untouched (no comment, no skip) and pause all ticks so the
+    // rest of the queue isn't burned through while the quota is drained.
+    if (isLimitError(logTail(logPath, 50))) {
+      await linear.moveIssue(ticket.id, config.statuses.todo);
+      state.active = null;
+      state.pausedUntil = pauseUntil(config);
+      saveState(paths.state, state);
+      log(`claude usage limit hit on ${ticket.identifier}; pausing until ${state.pausedUntil}`);
+      return 'paused';
+    }
+
     await linear.addComment(ticket.id, failureComment(verdict.detail, logTail(logPath)));
     await linear.moveIssue(ticket.id, config.statuses.todo);
     // Re-fetch updatedAt AFTER our own writes so our comment/move don't count as "user touched it".
@@ -177,6 +194,11 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
   try {
     const state = loadState(paths.state);
     await recoverInterrupted(state, deps);
+
+    if (isPaused(state)) {
+      log(`paused until ${state.pausedUntil} (claude usage limit)`);
+      return 'paused';
+    }
 
     const projectNames = config.projects.map((p) => p.linearProject);
     const issues = await linear.fetchTodoIssues(projectNames, config.statuses.inReview);
@@ -305,6 +327,16 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       return 'success';
     }
 
+    // Usage limit mid-verification: the ticket is fine (still In Review,
+    // status never changed) — just pause and retry it after the cooldown.
+    if (isLimitError(logTail(logPath, 50))) {
+      state.active = null;
+      state.pausedUntil = pauseUntil(config);
+      saveState(paths.state, state);
+      log(`claude usage limit hit verifying ${ticket.identifier}; pausing until ${state.pausedUntil}`);
+      return 'paused';
+    }
+
     const body = verifyFailureComment(detail, logTail(logPath));
     await linear.addComment(ticket.id, body);
     // Base-branch verifications have no PR to comment on.
@@ -330,8 +362,14 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
  */
 export async function runAutoTick(deps: TickDeps): Promise<TickOutcome> {
   const outcome = await runTick(deps);
+  // 'paused' means the usage limit is drained — don't spend it further on review.
   if (outcome !== 'idle') return outcome;
   return runReviewTick(deps);
+}
+
+function pauseUntil(config: Config): string {
+  const minutes = config.claude.limitCooldownMinutes ?? 30;
+  return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
 /** null = verified PASS; otherwise a human-readable failure detail. Fail-closed:

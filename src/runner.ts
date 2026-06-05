@@ -65,6 +65,15 @@ export function runClaude(opts: RunOptions): Promise<RunResult> {
   });
 }
 
+/** Does the run output look like an account/usage limit rather than a real
+ * failure of the ticket? Limit hits must pause the scheduler, not blame the
+ * ticket. */
+export function isLimitError(logText: string): boolean {
+  return /usage limit|limit (?:will )?reset|rate.?limit|overloaded|credit balance|out of credits/i.test(
+    logText,
+  );
+}
+
 export function logTail(logPath: string, maxLines = 30): string {
   if (!existsSync(logPath)) return '(no log)';
   const lines = readFileSync(logPath, 'utf8').trimEnd().split('\n');

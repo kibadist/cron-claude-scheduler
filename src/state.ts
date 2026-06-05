@@ -19,13 +19,21 @@ export interface SchedulerState {
   /** issueId -> branch pushed by a successful work run; lets the review tick
    * find the branch even when the ticket's title was edited afterwards */
   branches: Record<string, string>;
+  /** set when claude hits its usage limit: ticks do nothing until this ISO
+   * timestamp passes, so a drained quota can't burn through the Todo queue */
+  pausedUntil?: string;
 }
 
 export function loadState(statePath: string): SchedulerState {
   if (!existsSync(statePath)) return { active: null, skips: {}, branches: {} };
   try {
     const raw = JSON.parse(readFileSync(statePath, 'utf8')) as Partial<SchedulerState>;
-    return { active: raw.active ?? null, skips: raw.skips ?? {}, branches: raw.branches ?? {} };
+    return {
+      active: raw.active ?? null,
+      skips: raw.skips ?? {},
+      branches: raw.branches ?? {},
+      ...(raw.pausedUntil !== undefined && { pausedUntil: raw.pausedUntil }),
+    };
   } catch {
     return { active: null, skips: {}, branches: {} };
   }
@@ -33,6 +41,10 @@ export function loadState(statePath: string): SchedulerState {
 
 export function saveState(statePath: string, state: SchedulerState): void {
   writeFileSync(statePath, JSON.stringify(state, null, 2));
+}
+
+export function isPaused(state: SchedulerState, now: Date = new Date()): boolean {
+  return state.pausedUntil !== undefined && now.toISOString() < state.pausedUntil;
 }
 
 export function isSkipped(state: SchedulerState, issueId: string, updatedAt: string): boolean {

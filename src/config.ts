@@ -38,6 +38,11 @@ export function validateConfig(raw: unknown): Config {
     fail('claude.command must be a non-empty string');
   if (typeof claude.timeoutMinutes !== 'number' || claude.timeoutMinutes <= 0)
     fail('claude.timeoutMinutes must be a positive number');
+  if (
+    claude.limitCooldownMinutes !== undefined &&
+    (typeof claude.limitCooldownMinutes !== 'number' || claude.limitCooldownMinutes <= 0)
+  )
+    fail('claude.limitCooldownMinutes must be a positive number when set');
 
   const statuses = c.statuses as Record<string, unknown> | undefined;
   if (typeof statuses !== 'object' || statuses === null) fail('statuses section is required');
@@ -59,7 +64,11 @@ export function validateConfig(raw: unknown): Config {
 
   return {
     pollIntervalMinutes: c.pollIntervalMinutes,
-    claude: { command: claude.command as string, timeoutMinutes: claude.timeoutMinutes as number },
+    claude: {
+      command: claude.command as string,
+      timeoutMinutes: claude.timeoutMinutes as number,
+      limitCooldownMinutes: (claude.limitCooldownMinutes as number | undefined) ?? 30,
+    },
     statuses: {
       todo: statuses.todo as string,
       inProgress: statuses.inProgress as string,

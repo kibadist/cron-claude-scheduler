@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTick, type TickPaths } from '../src/tick.js';
 import { acquireLock } from '../src/lock.js';
-import { saveState } from '../src/state.js';
+import { loadState, saveState } from '../src/state.js';
 import { remoteBranchExists } from '../src/verify.js';
 import { git, makeRepoPair } from './helpers/git.js';
 import { FakeLinear, makeTicket } from './helpers/fake-linear.js';
@@ -138,6 +138,32 @@ describe('runTick', () => {
     expect(prompt).not.toContain('uploads.linear.app'); // rewritten to a local path
     const imagePath = prompt.match(/^- (\/.+image-1\.png)$/m)![1];
     expect(readFileSync(imagePath, 'utf8')).toBe('fake-png-bytes');
+  });
+
+  it('usage limit: ticket returns to Todo unblamed and the scheduler pauses', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    linear.add(makeTicket());
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-limit.sh'));
+
+    expect(await runTick({ config, linear, paths })).toBe('paused');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('Todo'); // un-claimed
+    expect(issue.comments).toHaveLength(0); // no failure comment — not the ticket's fault
+    const state = loadState(paths.state);
+    expect(state.skips).toEqual({}); // not skip-listed
+    expect(state.pausedUntil! > new Date().toISOString()).toBe(true);
+
+    // while paused, ticks do nothing at all (claude is never spawned)
+    config.claude.command = '/nonexistent/claude';
+    expect(await runTick({ config, linear, paths })).toBe('paused');
+
+    // pause expired -> ticks resume
+    const expired = loadState(paths.state);
+    expired.pausedUntil = new Date(Date.now() - 1_000).toISOString();
+    saveState(paths.state, expired);
+    expect(await runTick({ config, linear, paths })).toBe('failure'); // spawn failure now, proving it ran
   });
 
   it('workspace prep failure: ticket goes back to Todo, never stuck In Progress', async () => {

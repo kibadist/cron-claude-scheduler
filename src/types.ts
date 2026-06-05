@@ -13,6 +13,9 @@ export interface ProjectConfig {
 export interface ClaudeConfig {
   command: string;
   timeoutMinutes: number;
+  /** how long to pause all ticks after claude hits a usage/rate limit
+   * (default 30) */
+  limitCooldownMinutes?: number;
 }
 
 export interface StatusConfig {
