@@ -6,7 +6,7 @@ import { acquireLock, releaseLock } from './lock.js';
 import { isSkipped, loadState, saveState, type SchedulerState } from './state.js';
 import { branchName, buildPrompt, buildVerifyPrompt } from './prompt.js';
 import { logTail, runClaude, type RunResult } from './runner.js';
-import { commentOnPr, remoteBranchExists, verifyWork, type VerifyResult } from './verify.js';
+import { commentOnPr, mergePr, remoteBranchExists, verifyWork, type VerifyResult } from './verify.js';
 import {
   addVerifyWorktree,
   addWorkWorktree,
@@ -29,6 +29,8 @@ export interface TickDeps {
   paths: TickPaths;
   /** injectable for tests; defaults to the real runner */
   run?: typeof runClaude;
+  /** injectable for tests; defaults to the real gh-based PR merge */
+  merge?: typeof mergePr;
   log?: (msg: string) => void;
 }
 
@@ -249,7 +251,31 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     }
 
     if (detail === null) {
-      await linear.addComment(ticket.id, verifySuccessComment(branch, logTail(logPath, 15)));
+      // Auto-merge before touching the ticket: a failed merge must leave the
+      // ticket In Review with an actionable comment, not half-finished.
+      let mergeNote = '';
+      if (project.mergeOnVerified) {
+        const merged = (deps.merge ?? mergePr)(project.path, branch);
+        if (!merged.ok) {
+          const body = [
+            `🤖 Scheduler: verification PASSED but auto-merge failed — ${merged.detail}.`,
+            '',
+            'The ticket stays In Review. Resolve the merge problem (conflict, branch',
+            'protection, gh auth), then edit or comment on this ticket to retry.',
+          ].join('\n');
+          await linear.addComment(ticket.id, body);
+          if (!commentOnPr(project.path, branch, body)) {
+            log(`could not comment on the PR for ${branch} (no PR or gh unavailable)`);
+          }
+          state.skips[ticket.id] = await linear.getUpdatedAt(ticket.id);
+          state.active = null;
+          saveState(paths.state, state);
+          log(`verified ${ticket.identifier} but auto-merge failed: ${merged.detail}`);
+          return 'failure';
+        }
+        mergeNote = merged.detail;
+      }
+      await linear.addComment(ticket.id, verifySuccessComment(branch, logTail(logPath, 15), mergeNote));
       try {
         await linear.moveIssue(ticket.id, config.statuses.done);
       } catch (e) {
@@ -320,11 +346,11 @@ function reviewVerdict(result: RunResult, logPath: string, timeoutMinutes: numbe
   return null;
 }
 
-function verifySuccessComment(branch: string, reportTail: string): string {
+function verifySuccessComment(branch: string, reportTail: string, mergeNote = ''): string {
   return [
     '🤖 Scheduler: verified in the browser — moving to Done.',
     '',
-    `- branch: \`${branch}\` (PR left open for merge)`,
+    mergeNote ? `- ${mergeNote}` : `- branch: \`${branch}\` (PR left open for merge)`,
     '',
     'Verifier report (tail):',
     '```',

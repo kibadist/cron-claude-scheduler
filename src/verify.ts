@@ -20,6 +20,25 @@ export function remoteHeadSha(cwd: string, branch: string): string {
   return out.split('\t')[0] ?? '';
 }
 
+export interface MergeResult {
+  ok: boolean;
+  detail: string;
+}
+
+/** Squash-merge the branch's PR and delete the branch. Never throws — a merge
+ * failure (conflict, branch protection, gh auth) is reported as a result. */
+export function mergePr(cwd: string, branch: string): MergeResult {
+  try {
+    execFileSync('gh', ['pr', 'merge', branch, '--squash', '--delete-branch'], {
+      cwd,
+      encoding: 'utf8',
+    });
+    return { ok: true, detail: `PR for \`${branch}\` squash-merged; branch deleted` };
+  } catch (e) {
+    return { ok: false, detail: (e as Error).message.trim() };
+  }
+}
+
 /** Post a comment on the branch's PR. Best-effort: returns false when there is
  * no PR, gh is missing/unauthenticated, or the repo is not on GitHub. */
 export function commentOnPr(cwd: string, branch: string, body: string): boolean {

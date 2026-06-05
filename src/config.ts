@@ -85,12 +85,17 @@ function validateProject(raw: unknown, index: number): ProjectConfig {
     fail(`${at}.gitFlow must be one of: ${GIT_FLOWS.join(', ')}`);
   if (typeof p.baseBranch !== 'string' || p.baseBranch.length === 0)
     fail(`${at}.baseBranch must be a non-empty string`);
+  if (p.mergeOnVerified !== undefined && typeof p.mergeOnVerified !== 'boolean')
+    fail(`${at}.mergeOnVerified must be a boolean`);
+  if (p.mergeOnVerified === true && p.gitFlow !== 'branch-pr')
+    fail(`${at}.mergeOnVerified requires gitFlow "branch-pr" (there is no PR to merge otherwise)`);
 
   return {
     linearProject: p.linearProject,
     path: p.path,
     gitFlow: p.gitFlow as GitFlow,
     baseBranch: p.baseBranch,
+    mergeOnVerified: (p.mergeOnVerified as boolean | undefined) ?? false,
   };
 }
 

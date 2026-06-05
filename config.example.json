@@ -15,7 +15,8 @@
       "linearProject": "My Web App",
       "path": "/Users/you/Code/my-web-app",
       "gitFlow": "branch-pr",
-      "baseBranch": "main"
+      "baseBranch": "main",
+      "mergeOnVerified": true
     },
     {
       "linearProject": "My Mobile App",

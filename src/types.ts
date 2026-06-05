@@ -5,6 +5,9 @@ export interface ProjectConfig {
   path: string;
   gitFlow: GitFlow;
   baseBranch: string;
+  /** branch-pr only: squash-merge the PR automatically after browser
+   * verification passes, before moving the ticket to Done (default false) */
+  mergeOnVerified?: boolean;
 }
 
 export interface ClaudeConfig {

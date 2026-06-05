@@ -88,6 +88,28 @@ describe('loadConfig', () => {
     expect(() => loadConfig(writeConfig({ projects: [] }))).toThrow(/non-empty array/);
   });
 
+  it('defaults mergeOnVerified to false and accepts it on branch-pr', () => {
+    expect(loadConfig(writeConfig()).projects[0].mergeOnVerified).toBe(false);
+    const path = writeConfig({
+      projects: [
+        { linearProject: 'X', path: workspace, gitFlow: 'branch-pr', baseBranch: 'main', mergeOnVerified: true },
+      ],
+    });
+    expect(loadConfig(path).projects[0].mergeOnVerified).toBe(true);
+  });
+
+  it('rejects mergeOnVerified on flows without a PR', () => {
+    expect(() =>
+      loadConfig(
+        writeConfig({
+          projects: [
+            { linearProject: 'X', path: workspace, gitFlow: 'branch-push', baseBranch: 'main', mergeOnVerified: true },
+          ],
+        }),
+      ),
+    ).toThrow(/requires gitFlow "branch-pr"/);
+  });
+
   it('rejects duplicate linearProject names (case-insensitive)', () => {
     expect(() =>
       loadConfig(

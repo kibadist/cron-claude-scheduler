@@ -138,6 +138,47 @@ describe('runReviewTick', () => {
     expect(await runReviewTick({ config, linear, paths })).toBe('idle');
   });
 
+  it('mergeOnVerified: squash-merges the PR after PASS, then moves to Done', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
+    config.projects[0].mergeOnVerified = true;
+
+    const mergedWith: string[] = [];
+    const merge = (cwd: string, branch: string): { ok: boolean; detail: string } => {
+      mergedWith.push(branch);
+      return { ok: true, detail: `PR for \`${branch}\` squash-merged; branch deleted` };
+    };
+
+    expect(await runReviewTick({ config, linear, paths, merge })).toBe('success');
+    expect(mergedWith).toEqual([BRANCH]);
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('Done');
+    expect(issue.comments.at(-1)).toContain('squash-merged');
+  });
+
+  it('mergeOnVerified: a failed merge keeps the ticket In Review and skips it', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
+    config.projects[0].mergeOnVerified = true;
+
+    const merge = (): { ok: boolean; detail: string } => ({ ok: false, detail: 'merge conflict' });
+
+    expect(await runReviewTick({ config, linear, paths, merge })).toBe('failure');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('In Review'); // never moved to Done
+    expect(issue.comments.at(-1)).toContain('auto-merge failed');
+    // skipped until touched — no merge-retry burn loop
+    expect(await runReviewTick({ config, linear, paths, merge })).toBe('idle');
+  });
+
   it('finds the branch via the recorded mapping when the title was edited after the work run', async () => {
     const { workspace } = makeRepoPair();
     commitAndPush(workspace, BRANCH, 'work.txt'); // branch from the ORIGINAL title

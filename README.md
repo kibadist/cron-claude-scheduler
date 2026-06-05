@@ -100,6 +100,7 @@ From then on: write a ticket, move it to **Todo**, and merge the PR once the tic
 | `projects[].path` | Absolute path to the local git workspace for that project |
 | `projects[].gitFlow` | `branch-pr` \| `branch-push` \| `main-push` (see below) |
 | `projects[].baseBranch` | Branch the work starts from / is pushed to |
+| `projects[].mergeOnVerified` | `branch-pr` only: squash-merge the PR automatically after browser verification passes (optional, default `false`) |
 
 Config is validated on startup with specific error messages (missing path, not a git repo, unknown gitFlow, duplicate project names, …).
 
@@ -149,8 +150,10 @@ For each **In Review** ticket whose `claude/…` branch exists on origin (ticket
 1. Creates a **disposable git worktree** of the branch in a temp directory — your main checkout is never touched
 2. Runs Claude there with the `/verify` skill: install deps, start the app locally, and verify each requirement of the ticket by exercising the real behavior in the browser
 3. Requires a machine-readable `VERDICT: PASS` as the agent's final line — **fail-closed**: no marker, FAIL marker, timeout, or non-zero exit all count as failure
-4. **PASS** → ticket moves to **Done** with a verification report comment; the PR stays open — merging remains your call
+4. **PASS** → ticket moves to **Done** with a verification report comment. With `mergeOnVerified: true` the PR is **squash-merged automatically first** (fail-closed: a merge conflict keeps the ticket In Review with an actionable comment); otherwise the PR stays open and merging remains your call
 5. **FAIL** → 🤖 comment with the findings on the Linear ticket **and on the PR** (`gh pr comment`); the ticket stays In Review and is skipped until you touch it — or move it back to Todo to have the work agent fix the findings
+
+With `mergeOnVerified` the loop is fully autonomous: code reaches `main` only after a passing browser verification, failures stay isolated on their branches, and your only job is writing tickets. Note: `main-push` projects skip verification entirely (there is no branch to verify) — their tickets wait in In Review for you.
 
 Work ticks and verification ticks share the same lockfile, so they never run simultaneously — and the default tick already alternates between them, so the single launchd agent drives the entire Todo → In Review → Done loop with no extra setup.
 
