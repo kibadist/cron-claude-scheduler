@@ -77,6 +77,7 @@ export class LinearApi implements LinearGateway {
         createdAt: issue.createdAt.toISOString(),
         updatedAt: issue.updatedAt.toISOString(),
         projectName: project.name,
+        ...(project.description ? { projectDescription: project.description } : {}),
       });
     }
     return tickets.sort(compareTickets);

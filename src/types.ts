@@ -48,4 +48,6 @@ export interface TicketInfo {
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
   projectName: string;
+  /** the Linear project's description — shared context included in agent prompts */
+  projectDescription?: string;
 }

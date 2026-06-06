@@ -40,6 +40,22 @@ function gitFlowInstructions(project: ProjectConfig, branch: string): string {
   }
 }
 
+const MAX_PROJECT_CONTEXT_CHARS = 4_000;
+
+function projectContextSection(ticket: TicketInfo): string {
+  const description = ticket.projectDescription?.trim();
+  if (!description) return '';
+  const body =
+    description.length > MAX_PROJECT_CONTEXT_CHARS
+      ? `${description.slice(0, MAX_PROJECT_CONTEXT_CHARS)}\n\n_(truncated)_`
+      : description;
+  return `
+
+## Project context (from the Linear project "${ticket.projectName}")
+
+${body}`;
+}
+
 function ticketSection(ticket: TicketInfo): string {
   const comments = ticket.comments.length
     ? ticket.comments.map((c) => `**${c.author}:** ${c.body}`).join('\n\n')
@@ -53,7 +69,7 @@ ${ticket.description || '_no description provided_'}
 
 ## Comments
 
-${comments}`;
+${comments}${projectContextSection(ticket)}`;
 }
 
 function imagesSection(imagePaths: string[]): string {

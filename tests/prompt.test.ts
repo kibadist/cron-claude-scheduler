@@ -73,6 +73,33 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('git push origin HEAD:main');
   });
 
+  it('includes the Linear project description as shared context when present', () => {
+    const withContext = buildPrompt(
+      makeTicket({ projectDescription: 'Articles should make users retrieve and explain knowledge.' }),
+      makeProject(),
+      'claude/kib-12-x',
+    );
+    expect(withContext).toContain('## Project context (from the Linear project "Test Project")');
+    expect(withContext).toContain('retrieve and explain knowledge');
+
+    const withoutContext = buildPrompt(makeTicket(), makeProject(), 'claude/kib-12-x');
+    expect(withoutContext).not.toContain('## Project context');
+
+    // verify prompt gets it too
+    const verify = buildVerifyPrompt(makeTicket({ projectDescription: 'Product thesis here.' }), 'main', [], true);
+    expect(verify).toContain('Product thesis here.');
+  });
+
+  it('truncates an oversized project description', () => {
+    const prompt = buildPrompt(
+      makeTicket({ projectDescription: 'x'.repeat(10_000) }),
+      makeProject(),
+      'claude/kib-12-x',
+    );
+    expect(prompt).toContain('_(truncated)_');
+    expect(prompt.length).toBeLessThan(10_000);
+  });
+
   it('verify prompt explains the base-branch case when there is no PR branch', () => {
     const onBranch = buildVerifyPrompt(makeTicket(), 'claude/kib-12-x', [], false);
     expect(onBranch).toContain('the branch containing the work');
