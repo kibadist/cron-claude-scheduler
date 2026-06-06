@@ -182,7 +182,7 @@ The two compose fine: use this for the local factory floor, and `/schedule` for 
 | `Config error: …` on start | The message names the exact field — fix `config.json` |
 | `claude could not be spawned` comment on a ticket | `claude` isn't on the PATH launchd sees — re-run `npm run install-agent` (it bakes the current locations of `node`/`claude`/`gh` into the agent) |
 | `branch pushed but no PR was found` | `gh auth login`, or the repo's remote isn't on GitHub — switch that project to `branch-push` |
-| Ticket stuck skipped | That's by design after a failure — edit or comment on the ticket to re-queue it |
+| Ticket stuck skipped | That's by design after a failure — **add** a comment or edit the ticket to re-queue it. Deleting the 🤖 failure comment does NOT count: Linear doesn't register deletions as updates |
 | `paused until …` in the log | claude hit its usage/rate limit — the affected ticket went back to its queue untouched and ticks resume automatically after `limitCooldownMinutes` |
 | `Workflow state "…" not found` | Your Linear team uses different status names — set them in `statuses.*` |
 | Nothing happens after install | `tail -f logs/launchd.log`; confirm the plist loaded with `launchctl list \| grep claude-scheduler` |

@@ -413,8 +413,9 @@ function verifyFailureComment(detail: string, tail: string): string {
     tail,
     '```',
     '',
-    'The ticket stays In Review. Edit or comment on it to re-queue verification,',
-    'or move it back to Todo to have the work agent fix the findings.',
+    'The ticket stays In Review. To re-queue verification, ADD a comment or edit',
+    'the ticket (deleting this comment does not count — Linear does not register',
+    'deletions as updates), or move it back to Todo to have the work agent fix the findings.',
   ].join('\n');
 }
 
@@ -454,6 +455,7 @@ function failureComment(detail: string, tail: string): string {
     tail,
     '```',
     '',
-    'Edit or comment on this ticket to make it eligible for another attempt.',
+    'To make it eligible for another attempt, ADD a comment or edit the ticket',
+    '(deleting this comment does not count — Linear does not register deletions as updates).',
   ].join('\n');
 }
