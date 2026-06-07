@@ -95,6 +95,7 @@ From then on: write a ticket, move it to **Todo**, and merge the PR once the tic
 | `claude.command` | The Claude Code binary (usually just `claude`) |
 | `claude.timeoutMinutes` | A run exceeding this is killed and reported as a failure |
 | `claude.limitCooldownMinutes` | Pause all ticks this long after claude hits a usage/rate limit (optional, default `30`) |
+| `maxRetries` | How many times a failed verification automatically moves the ticket back to Todo for re-implementation before requiring your touch (optional, default `1`; `0` disables) |
 | `statuses.todo` / `inProgress` / `inReview` | Workflow state **names** in your Linear team (case-insensitive) |
 | `statuses.done` | Target status after a successful verification run (optional, default `"Done"`) |
 | `projects[].linearProject` | Linear project name (case-insensitive; must be unique in the list) |
@@ -152,7 +153,7 @@ For each **In Review** ticket, the scheduler:
 2. Runs Claude there with the `/verify` skill: install deps, start the app locally, and verify each requirement of the ticket by exercising the real behavior in the browser
 3. Requires a machine-readable `VERDICT: PASS` as the agent's final line — **fail-closed**: no marker, FAIL marker, timeout, or non-zero exit all count as failure
 4. **PASS** → ticket moves to **Done** with a verification report comment. With `mergeOnVerified: true` the PR is **squash-merged automatically first** (fail-closed: a merge conflict keeps the ticket In Review with an actionable comment); otherwise the PR stays open and merging remains your call
-5. **FAIL** → 🤖 comment with the findings on the Linear ticket **and on the PR** (`gh pr comment`); the ticket stays In Review and is skipped until you touch it — or move it back to Todo to have the work agent fix the findings
+5. **FAIL** → 🤖 comment with the findings on the Linear ticket **and on the PR** (`gh pr comment`). With retry budget left (`maxRetries`, default 1), the ticket is **moved back to Todo automatically** — the work agent re-implements with the verifier's findings in its prompt and force-with-lease-updates the same branch/PR. Once the budget is exhausted, the ticket stays In Review skipped until you touch it. Environmental failures (workspace prep, usage limits) never consume retries.
 
 With `mergeOnVerified` the loop is fully autonomous: code reaches `main` only after a passing browser verification, failures stay isolated on their branches, and your only job is writing tickets. Tickets without a PR branch (`main-push`, manually merged PRs) are verified against the base branch tip — the verifier is told the work should already be merged there, and its absence is a FAIL.
 

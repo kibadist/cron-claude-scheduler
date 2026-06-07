@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAutoTick, runReviewTick, runTick, type TickPaths } from '../src/tick.js';
 import { saveState, loadState } from '../src/state.js';
-import { makeRepoPair, commitAndPush } from './helpers/git.js';
+import { git, makeRepoPair, commitAndPush } from './helpers/git.js';
 import { FakeLinear, makeTicket } from './helpers/fake-linear.js';
 import type { Config, GitFlow } from '../src/types.js';
 
@@ -26,6 +26,7 @@ function makeConfig(workspace: string, claudeCommand: string, gitFlow: GitFlow =
     claude: { command: claudeCommand, timeoutMinutes: 1 },
     statuses: { todo: 'Todo', inProgress: 'In Progress', inReview: 'In Review', done: 'Done' },
     projects: [{ linearProject: 'Test Project', path: workspace, gitFlow, baseBranch: 'main' }],
+    maxRetries: 0, // most tests exercise the no-auto-retry paths; retry tests override
   };
 }
 
@@ -138,6 +139,37 @@ describe('runReviewTick', () => {
     expect(await runReviewTick({ config, linear, paths })).toBe('idle');
   });
 
+  it('auto-retry: failed verification moves the ticket back to Todo, work re-runs, budget exhausts', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, BRANCH, 'work.txt');
+    git(workspace, 'checkout', 'main'); // leave the workspace as production would:
+    git(workspace, 'branch', '-D', BRANCH); // remote branch only, no local ref
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'In Review');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-fail.sh'), 'branch-push');
+    config.maxRetries = 1;
+
+    // 1st verification failure: handed straight back to the work agent
+    expect(await runReviewTick({ config, linear, paths })).toBe('failure');
+    const issue = linear.issues.get('issue-1')!;
+    expect(issue.status).toBe('Todo'); // moved automatically — no human touch needed
+    expect(issue.comments.at(-1)).toContain('another implementation attempt (1 of 1)');
+    expect(loadState(paths.state).skips).toEqual({}); // NOT skip-listed: must stay eligible
+    expect(loadState(paths.state).retries['issue-1']).toBe(1);
+
+    // the work agent re-implements (force-with-lease updates the old branch)
+    const workConfig = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'), 'branch-push');
+    expect(await runTick({ config: workConfig, linear, paths })).toBe('success');
+    expect(issue.status).toBe('In Review');
+
+    // 2nd verification failure: budget exhausted -> stays In Review, skipped
+    expect(await runReviewTick({ config, linear, paths })).toBe('failure');
+    expect(issue.status).toBe('In Review');
+    expect(issue.comments.at(-1)).toContain('attempts exhausted');
+    expect(await runReviewTick({ config, linear, paths })).toBe('idle'); // skip-until-touched now
+  });
+
   it('mergeOnVerified: squash-merges the PR after PASS, then moves to Done', async () => {
     const { workspace } = makeRepoPair();
     commitAndPush(workspace, BRANCH, 'work.txt');
@@ -189,6 +221,7 @@ describe('runReviewTick', () => {
       active: null,
       skips: {},
       branches: { 'issue-1': BRANCH }, // recorded by the work run
+      retries: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -222,6 +255,7 @@ describe('runReviewTick', () => {
       active: null,
       skips: {},
       branches: { 'stale-ticket': 'claude/old-1-gone' },
+      retries: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -273,6 +307,7 @@ describe('runReviewTick', () => {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z', mode: 'review' },
       skips: {},
       branches: {},
+      retries: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -294,6 +329,7 @@ describe('runReviewTick', () => {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z', mode: 'work' },
       skips: {},
       branches: {},
+      retries: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -339,6 +375,7 @@ describe('runTick with a review-mode active record', () => {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z', mode: 'review' },
       skips: {},
       branches: {},
+      retries: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'), 'branch-push');
 

@@ -4,6 +4,7 @@
     "command": "claude",
     "timeoutMinutes": 60
   },
+  "maxRetries": 1,
   "statuses": {
     "todo": "Todo",
     "inProgress": "In Progress",

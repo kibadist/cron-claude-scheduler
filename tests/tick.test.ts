@@ -7,7 +7,7 @@ import { runTick, type TickPaths } from '../src/tick.js';
 import { acquireLock } from '../src/lock.js';
 import { loadState, saveState } from '../src/state.js';
 import { remoteBranchExists } from '../src/verify.js';
-import { git, makeRepoPair } from './helpers/git.js';
+import { commitAndPush, git, makeRepoPair } from './helpers/git.js';
 import { FakeLinear, makeTicket } from './helpers/fake-linear.js';
 import type { Config, GitFlow } from '../src/types.js';
 
@@ -140,6 +140,20 @@ describe('runTick', () => {
     expect(readFileSync(imagePath, 'utf8')).toBe('fake-png-bytes');
   });
 
+  it('a stale branch from a previous attempt does not pass verification', async () => {
+    const { workspace } = makeRepoPair();
+    commitAndPush(workspace, 'claude/kib-1-add-hello-endpoint', 'old.txt'); // previous attempt
+    git(workspace, 'checkout', 'main');
+    git(workspace, 'branch', '-D', 'claude/kib-1-add-hello-endpoint');
+    const linear = new FakeLinear();
+    linear.add(makeTicket());
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-ok.sh')); // exit 0, pushes nothing
+
+    expect(await runTick({ config, linear, paths })).toBe('failure');
+    expect(linear.issues.get('issue-1')!.comments.at(-1)).toContain('was not updated');
+  });
+
   it('usage limit: ticket returns to Todo unblamed and the scheduler pauses', async () => {
     const { workspace } = makeRepoPair();
     const linear = new FakeLinear();
@@ -198,6 +212,7 @@ describe('runTick', () => {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z' },
       skips: {},
       branches: {},
+      retries: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
 
@@ -220,6 +235,7 @@ describe('runTick', () => {
       active: { issueId: 'issue-1', identifier: 'KIB-1', startedAt: '2026-06-04T00:00:00.000Z' },
       skips: {},
       branches: {},
+      retries: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
 

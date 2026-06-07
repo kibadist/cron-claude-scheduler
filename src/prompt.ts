@@ -18,17 +18,17 @@ function gitFlowInstructions(project: ProjectConfig, branch: string): string {
     case 'branch-pr':
       return [
         `1. You are already on the tip of \`${project.baseBranch}\`. Create and switch to a branch named exactly \`${branch}\`: \`git checkout -b ${branch}\`.`,
-        `2. Implement the task and make the project's tests pass (install dependencies first if the project needs them).`,
+        `2. Implement the task and make the project's tests pass (install dependencies first if the project needs them). If the comments contain verifier findings from a previous attempt, fixing those findings is the priority.`,
         `3. Commit your work with clear messages.`,
-        `4. Push the branch: \`git push -u origin ${branch}\`.`,
-        `5. Open a pull request with \`gh pr create\` targeting \`${project.baseBranch}\`; put the ticket ID in the PR title.`,
+        `4. Push the branch: \`git push --force-with-lease -u origin ${branch}\` (origin may hold a previous attempt; force-with-lease replaces it safely).`,
+        `5. Open a pull request with \`gh pr create\` targeting \`${project.baseBranch}\`; put the ticket ID in the PR title. If a PR for this branch already exists, do NOT create another — your push already updated it.`,
       ].join('\n');
     case 'branch-push':
       return [
         `1. You are already on the tip of \`${project.baseBranch}\`. Create and switch to a branch named exactly \`${branch}\`: \`git checkout -b ${branch}\`.`,
-        `2. Implement the task and make the project's tests pass (install dependencies first if the project needs them).`,
+        `2. Implement the task and make the project's tests pass (install dependencies first if the project needs them). If the comments contain verifier findings from a previous attempt, fixing those findings is the priority.`,
         `3. Commit your work with clear messages.`,
-        `4. Push the branch: \`git push -u origin ${branch}\`. Do NOT open a pull request.`,
+        `4. Push the branch: \`git push --force-with-lease -u origin ${branch}\` (origin may hold a previous attempt; force-with-lease replaces it safely). Do NOT open a pull request.`,
       ].join('\n');
     case 'main-push':
       return [

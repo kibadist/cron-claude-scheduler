@@ -54,6 +54,12 @@ export function validateConfig(raw: unknown): Config {
   if (statuses.done !== undefined && (typeof statuses.done !== 'string' || statuses.done.length === 0))
     fail('statuses.done must be a non-empty string when set');
 
+  if (
+    c.maxRetries !== undefined &&
+    (typeof c.maxRetries !== 'number' || !Number.isInteger(c.maxRetries) || c.maxRetries < 0)
+  )
+    fail('maxRetries must be a non-negative integer when set');
+
   if (!Array.isArray(c.projects) || c.projects.length === 0)
     fail('projects must be a non-empty array');
   const projects = (c.projects as unknown[]).map((p, i) => validateProject(p, i));
@@ -76,6 +82,7 @@ export function validateConfig(raw: unknown): Config {
       done: (statuses.done as string | undefined) ?? 'Done',
     },
     projects,
+    maxRetries: (c.maxRetries as number | undefined) ?? 1,
   };
 }
 

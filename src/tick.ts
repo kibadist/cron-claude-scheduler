@@ -6,7 +6,14 @@ import { acquireLock, releaseLock } from './lock.js';
 import { isPaused, isSkipped, loadState, saveState, type SchedulerState } from './state.js';
 import { branchName, buildPrompt, buildVerifyPrompt } from './prompt.js';
 import { isLimitError, logTail, runClaude, type RunResult } from './runner.js';
-import { commentOnPr, mergePr, remoteBranchExists, verifyWork, type VerifyResult } from './verify.js';
+import {
+  commentOnPr,
+  mergePr,
+  remoteBranchExists,
+  remoteHeadSha,
+  verifyWork,
+  type VerifyResult,
+} from './verify.js';
 import {
   addVerifyWorktree,
   addWorkWorktree,
@@ -86,11 +93,16 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     let worktree: string | undefined;
     try {
       worktree = addWorkWorktree(project.path, project.baseBranch);
-      // For main-push, the verification baseline is the exact commit the agent
-      // builds on (the worktree's HEAD, just fetched) — capturing it any
-      // earlier would let a third party's concurrent push masquerade as the
-      // agent's work.
-      const preRunSha = project.gitFlow === 'main-push' ? worktreeHeadSha(worktree) : '';
+      // Verification baseline. main-push: the exact commit the agent builds on
+      // (the worktree's HEAD, just fetched) — capturing it any earlier would
+      // let a third party's concurrent push masquerade as the agent's work.
+      // Branch flows: the branch's current remote SHA ('' when new), so a
+      // leftover branch from a previous attempt can't pass verification
+      // without being updated.
+      const preRunSha =
+        project.gitFlow === 'main-push'
+          ? worktreeHeadSha(worktree)
+          : remoteHeadSha(project.path, branch);
       // Ticket images live OUTSIDE the worktree so the agent can't accidentally
       // commit them; claude reads them via absolute paths.
       const assets = await prepareTicketAssets(ticket, join(dirname(worktree), 'assets'), (url) =>
@@ -256,6 +268,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     const logPath = join(paths.logsDir, `${ticket.identifier}-verify-${stamp}.log`);
 
     let detail: string | null = null;
+    let prepFailed = false;
     let worktree: string | undefined;
     try {
       worktree = addVerifyWorktree(project.path, branch);
@@ -272,6 +285,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       detail = reviewVerdict(result, logPath, config.claude.timeoutMinutes);
     } catch (e) {
       detail = `could not prepare the verification workspace: ${(e as Error).message}`;
+      prepFailed = true; // environmental — re-implementing the ticket won't fix it
     } finally {
       if (worktree) removeWorktree(project.path, worktree);
     }
@@ -321,6 +335,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       }
       delete state.skips[ticket.id];
       delete state.branches[ticket.id]; // ticket is Done; no longer needed
+      delete state.retries[ticket.id];
       state.active = null;
       saveState(paths.state, state);
       log(`verified ${ticket.identifier}: PASS → ${config.statuses.done}`);
@@ -337,7 +352,42 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       return 'paused';
     }
 
-    const body = verifyFailureComment(detail, logTail(logPath));
+    // Auto-retry: hand the ticket back to the work agent by moving it to Todo
+    // ourselves — the verifier's findings (the comment below) become part of
+    // the next work prompt. Environmental failures (workspace prep) are
+    // excluded: re-implementing won't fix a network problem.
+    const retriesUsed = state.retries[ticket.id] ?? 0;
+    const maxRetries = config.maxRetries ?? 1;
+    if (!prepFailed && retriesUsed < maxRetries) {
+      const attempt = retriesUsed + 1;
+      const body = [
+        `🤖 Scheduler: browser verification FAILED — ${detail}.`,
+        '',
+        'Last lines of the verification log:',
+        '```',
+        logTail(logPath),
+        '```',
+        '',
+        `Moving the ticket back to ${config.statuses.todo} automatically for another implementation attempt (${attempt} of ${maxRetries}). These findings are part of the next work prompt.`,
+      ].join('\n');
+      await linear.addComment(ticket.id, body);
+      if (!onBase && !commentOnPr(project.path, branch, body)) {
+        log(`could not comment on the PR for ${branch} (no PR or gh unavailable)`);
+      }
+      await linear.moveIssue(ticket.id, config.statuses.todo);
+      state.retries[ticket.id] = attempt;
+      // Deliberately NO skip entry: the ticket must be picked up by a work tick.
+      state.active = null;
+      saveState(paths.state, state);
+      log(`verification failed ${ticket.identifier}; sent back to ${config.statuses.todo} (attempt ${attempt}/${maxRetries})`);
+      return 'failure';
+    }
+
+    const exhausted =
+      !prepFailed && maxRetries > 0
+        ? `\n\nAutomatic re-implementation attempts exhausted (${maxRetries}).`
+        : '';
+    const body = verifyFailureComment(detail, logTail(logPath)) + exhausted;
     await linear.addComment(ticket.id, body);
     // Base-branch verifications have no PR to comment on.
     if (!onBase && !commentOnPr(project.path, branch, body)) {

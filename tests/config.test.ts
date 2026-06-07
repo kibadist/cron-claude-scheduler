@@ -88,6 +88,13 @@ describe('loadConfig', () => {
     expect(() => loadConfig(writeConfig({ projects: [] }))).toThrow(/non-empty array/);
   });
 
+  it('defaults maxRetries to 1 and validates it', () => {
+    expect(loadConfig(writeConfig()).maxRetries).toBe(1);
+    expect(loadConfig(writeConfig({ maxRetries: 0 })).maxRetries).toBe(0);
+    expect(() => loadConfig(writeConfig({ maxRetries: -1 }))).toThrow(/maxRetries/);
+    expect(() => loadConfig(writeConfig({ maxRetries: 1.5 }))).toThrow(/maxRetries/);
+  });
+
   it('defaults mergeOnVerified to false and accepts it on branch-pr', () => {
     expect(loadConfig(writeConfig()).projects[0].mergeOnVerified).toBe(false);
     const path = writeConfig({

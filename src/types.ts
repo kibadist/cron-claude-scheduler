@@ -31,6 +31,11 @@ export interface Config {
   claude: ClaudeConfig;
   statuses: StatusConfig;
   projects: ProjectConfig[];
+  /** how many times a failed verification automatically moves the ticket back
+   * to Todo so the work agent re-implements it (with the verifier's findings
+   * in its prompt) before falling back to skip-until-touched
+   * (default 1; 0 disables) */
+  maxRetries?: number;
 }
 
 export interface TicketComment {

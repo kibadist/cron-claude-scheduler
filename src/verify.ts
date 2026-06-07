@@ -75,13 +75,23 @@ export function verifyWork(project: ProjectConfig, branch: string, preRunSha: st
 function verifyWorkUnsafe(project: ProjectConfig, branch: string, preRunSha: string): VerifyResult {
   switch (project.gitFlow) {
     case 'branch-push': {
-      if (!remoteBranchExists(project.path, branch))
-        return { ok: false, detail: `branch \`${branch}\` was not pushed to origin` };
+      const now = remoteHeadSha(project.path, branch);
+      if (!now) return { ok: false, detail: `branch \`${branch}\` was not pushed to origin` };
+      if (now === preRunSha)
+        return {
+          ok: false,
+          detail: `branch \`${branch}\` was not updated — origin still has only a previous attempt's commits`,
+        };
       return { ok: true, detail: `branch \`${branch}\` pushed to origin` };
     }
     case 'branch-pr': {
-      if (!remoteBranchExists(project.path, branch))
-        return { ok: false, detail: `branch \`${branch}\` was not pushed to origin` };
+      const now = remoteHeadSha(project.path, branch);
+      if (!now) return { ok: false, detail: `branch \`${branch}\` was not pushed to origin` };
+      if (now === preRunSha)
+        return {
+          ok: false,
+          detail: `branch \`${branch}\` was not updated — origin still has only a previous attempt's commits`,
+        };
       const prUrl = prUrlForBranch(project.path, branch);
       if (!prUrl) return { ok: false, detail: `branch \`${branch}\` was pushed but no PR was found` };
       return { ok: true, detail: `branch \`${branch}\` pushed, PR open`, prUrl };
