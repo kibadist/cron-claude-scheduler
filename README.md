@@ -95,6 +95,8 @@ From then on: write a ticket, move it to **Todo**, and merge the PR once the tic
 | `claude.command` | The Claude Code binary (usually just `claude`) |
 | `claude.timeoutMinutes` | A run exceeding this is killed and reported as a failure |
 | `claude.limitCooldownMinutes` | Pause all ticks this long after claude hits a usage/rate limit (optional, default `30`) |
+| `claude.model` | Model passed to every run as `--model` (e.g. `"opus"`, `"sonnet"`). Optional; omit to use the `claude` CLI's own default. Overridden per project by `projects[].model` |
+| `claude.args` | Extra CLI flags appended to every `claude` invocation, e.g. `["--verbose"]` (optional, escape hatch) |
 | `maxRetries` | How many times a failed verification automatically moves the ticket back to Todo for re-implementation before requiring your touch (optional, default `1`; `0` disables) |
 | `statuses.todo` / `inProgress` / `inReview` | Workflow state **names** in your Linear team (case-insensitive) |
 | `statuses.done` | Target status after a successful verification run (optional, default `"Done"`) |
@@ -103,6 +105,7 @@ From then on: write a ticket, move it to **Todo**, and merge the PR once the tic
 | `projects[].gitFlow` | `branch-pr` \| `branch-push` \| `main-push` (see below) |
 | `projects[].baseBranch` | Branch the work starts from / is pushed to |
 | `projects[].mergeOnVerified` | `branch-pr` only: squash-merge the PR automatically after browser verification passes (optional, default `false`) |
+| `projects[].model` | Overrides `claude.model` for this project's work and review runs — e.g. `"opus"` for a hard repo, `"sonnet"` for QA (optional) |
 
 Config is validated on startup with specific error messages (missing path, not a git repo, unknown gitFlow, duplicate project names, …).
 

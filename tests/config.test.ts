@@ -95,6 +95,44 @@ describe('loadConfig', () => {
     expect(() => loadConfig(writeConfig({ maxRetries: 1.5 }))).toThrow(/maxRetries/);
   });
 
+  it('leaves model/args undefined by default and validates them', () => {
+    const base = loadConfig(writeConfig());
+    expect(base.claude.model).toBeUndefined();
+    expect(base.claude.args).toBeUndefined();
+    expect(base.projects[0].model).toBeUndefined();
+
+    const set = loadConfig(
+      writeConfig({
+        claude: { command: 'claude', timeoutMinutes: 60, model: 'opus', args: ['--verbose'] },
+        projects: [
+          { linearProject: 'X', path: workspace, gitFlow: 'branch-pr', baseBranch: 'main', model: 'sonnet' },
+        ],
+      }),
+    );
+    expect(set.claude.model).toBe('opus');
+    expect(set.claude.args).toEqual(['--verbose']);
+    expect(set.projects[0].model).toBe('sonnet');
+  });
+
+  it('rejects malformed model/args', () => {
+    expect(() =>
+      loadConfig(writeConfig({ claude: { command: 'claude', timeoutMinutes: 60, model: '' } })),
+    ).toThrow(/claude.model/);
+    expect(() =>
+      loadConfig(writeConfig({ claude: { command: 'claude', timeoutMinutes: 60, args: 'opus' } })),
+    ).toThrow(/claude.args/);
+    expect(() =>
+      loadConfig(writeConfig({ claude: { command: 'claude', timeoutMinutes: 60, args: [1] } })),
+    ).toThrow(/claude.args/);
+    expect(() =>
+      loadConfig(
+        writeConfig({
+          projects: [{ linearProject: 'X', path: workspace, gitFlow: 'branch-push', baseBranch: 'main', model: '' }],
+        }),
+      ),
+    ).toThrow(/model/);
+  });
+
   it('defaults mergeOnVerified to false and accepts it on branch-pr', () => {
     expect(loadConfig(writeConfig()).projects[0].mergeOnVerified).toBe(false);
     const path = writeConfig({

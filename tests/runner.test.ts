@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runClaude, logTail } from '../src/runner.js';
+import { runClaude, logTail, buildArgs } from '../src/runner.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 let dir: string;
@@ -62,6 +62,22 @@ describe('runClaude', () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it('passes --model and extra args through to the command', async () => {
+    const result = await runClaude({
+      command: join(FIXTURES, 'fake-claude-args.sh'),
+      prompt: '',
+      cwd: dir,
+      timeoutMs: 10_000,
+      logPath,
+      model: 'opus',
+      extraArgs: ['--verbose'],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(logPath, 'utf8')).toContain(
+      'args: -p --dangerously-skip-permissions --model opus --verbose',
+    );
+  });
+
   it('resolves instead of crashing when the log path is unwritable', async () => {
     const result = await runClaude({
       command: join(FIXTURES, 'fake-claude-ok.sh'),
@@ -72,6 +88,27 @@ describe('runClaude', () => {
     });
     expect(result.exitCode).toBeNull();
     expect(result.timedOut).toBe(false);
+  });
+});
+
+describe('buildArgs', () => {
+  it('uses only the built-in flags by default', () => {
+    expect(buildArgs({})).toEqual(['-p', '--dangerously-skip-permissions']);
+  });
+
+  it('appends --model then extra args, in that order', () => {
+    expect(buildArgs({ model: 'sonnet', extraArgs: ['--foo', 'bar'] })).toEqual([
+      '-p',
+      '--dangerously-skip-permissions',
+      '--model',
+      'sonnet',
+      '--foo',
+      'bar',
+    ]);
+  });
+
+  it('omits --model when unset and ignores an empty extraArgs array', () => {
+    expect(buildArgs({ extraArgs: [] })).toEqual(['-p', '--dangerously-skip-permissions']);
   });
 });
 

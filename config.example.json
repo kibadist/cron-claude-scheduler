@@ -2,7 +2,8 @@
   "pollIntervalMinutes": 2,
   "claude": {
     "command": "claude",
-    "timeoutMinutes": 60
+    "timeoutMinutes": 60,
+    "model": "opus"
   },
   "maxRetries": 1,
   "statuses": {
@@ -23,7 +24,8 @@
       "linearProject": "My Mobile App",
       "path": "/Users/you/Code/my-mobile-app",
       "gitFlow": "branch-push",
-      "baseBranch": "main"
+      "baseBranch": "main",
+      "model": "sonnet"
     }
   ]
 }

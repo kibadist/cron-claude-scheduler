@@ -114,6 +114,8 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
         cwd: worktree,
         timeoutMs: config.claude.timeoutMinutes * 60_000,
         logPath,
+        model: project.model ?? config.claude.model,
+        extraArgs: config.claude.args,
       });
       verdict = verdictFor(result, project, branch, preRunSha, config.claude.timeoutMinutes);
     } catch (e) {
@@ -281,6 +283,8 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
         cwd: worktree,
         timeoutMs: config.claude.timeoutMinutes * 60_000,
         logPath,
+        model: project.model ?? config.claude.model,
+        extraArgs: config.claude.args,
       });
       detail = reviewVerdict(result, logPath, config.claude.timeoutMinutes);
     } catch (e) {

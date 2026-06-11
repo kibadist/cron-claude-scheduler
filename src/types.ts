@@ -8,6 +8,9 @@ export interface ProjectConfig {
   /** branch-pr only: squash-merge the PR automatically after browser
    * verification passes, before moving the ticket to Done (default false) */
   mergeOnVerified?: boolean;
+  /** overrides claude.model for this project's work and review runs
+   * (e.g. "opus" for a hard repo, "sonnet" for QA) */
+  model?: string;
 }
 
 export interface ClaudeConfig {
@@ -16,6 +19,12 @@ export interface ClaudeConfig {
   /** how long to pause all ticks after claude hits a usage/rate limit
    * (default 30) */
   limitCooldownMinutes?: number;
+  /** default model passed as `--model` to every run (e.g. "opus", "sonnet");
+   * the bare claude CLI default is used when unset. A project's own `model`
+   * takes precedence. */
+  model?: string;
+  /** extra CLI flags appended to every claude invocation (escape hatch) */
+  args?: string[];
 }
 
 export interface StatusConfig {

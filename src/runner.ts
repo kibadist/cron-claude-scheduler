@@ -13,12 +13,25 @@ export interface RunOptions {
   cwd: string;
   timeoutMs: number;
   logPath: string;
+  /** passed to claude as `--model <model>` when set; the bare CLI default
+   * is used otherwise */
+  model?: string;
+  /** extra CLI flags appended after the built-in ones (escape hatch) */
+  extraArgs?: string[];
+}
+
+/** Build the argv for a claude run. Exported for unit testing the flag order. */
+export function buildArgs(opts: Pick<RunOptions, 'model' | 'extraArgs'>): string[] {
+  const args = ['-p', '--dangerously-skip-permissions'];
+  if (opts.model) args.push('--model', opts.model);
+  if (opts.extraArgs?.length) args.push(...opts.extraArgs);
+  return args;
 }
 
 export function runClaude(opts: RunOptions): Promise<RunResult> {
   return new Promise((resolve) => {
     const log = createWriteStream(opts.logPath, { flags: 'a' });
-    const child = spawn(opts.command, ['-p', '--dangerously-skip-permissions'], {
+    const child = spawn(opts.command, buildArgs(opts), {
       cwd: opts.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
     });

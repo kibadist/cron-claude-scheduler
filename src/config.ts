@@ -43,6 +43,13 @@ export function validateConfig(raw: unknown): Config {
     (typeof claude.limitCooldownMinutes !== 'number' || claude.limitCooldownMinutes <= 0)
   )
     fail('claude.limitCooldownMinutes must be a positive number when set');
+  if (claude.model !== undefined && (typeof claude.model !== 'string' || claude.model.length === 0))
+    fail('claude.model must be a non-empty string when set');
+  if (
+    claude.args !== undefined &&
+    (!Array.isArray(claude.args) || claude.args.some((a) => typeof a !== 'string'))
+  )
+    fail('claude.args must be an array of strings when set');
 
   const statuses = c.statuses as Record<string, unknown> | undefined;
   if (typeof statuses !== 'object' || statuses === null) fail('statuses section is required');
@@ -74,6 +81,8 @@ export function validateConfig(raw: unknown): Config {
       command: claude.command as string,
       timeoutMinutes: claude.timeoutMinutes as number,
       limitCooldownMinutes: (claude.limitCooldownMinutes as number | undefined) ?? 30,
+      model: claude.model as string | undefined,
+      args: claude.args as string[] | undefined,
     },
     statuses: {
       todo: statuses.todo as string,
@@ -105,6 +114,8 @@ function validateProject(raw: unknown, index: number): ProjectConfig {
     fail(`${at}.mergeOnVerified must be a boolean`);
   if (p.mergeOnVerified === true && p.gitFlow !== 'branch-pr')
     fail(`${at}.mergeOnVerified requires gitFlow "branch-pr" (there is no PR to merge otherwise)`);
+  if (p.model !== undefined && (typeof p.model !== 'string' || p.model.length === 0))
+    fail(`${at}.model must be a non-empty string when set`);
 
   return {
     linearProject: p.linearProject,
@@ -112,6 +123,7 @@ function validateProject(raw: unknown, index: number): ProjectConfig {
     gitFlow: p.gitFlow as GitFlow,
     baseBranch: p.baseBranch,
     mergeOnVerified: (p.mergeOnVerified as boolean | undefined) ?? false,
+    model: p.model as string | undefined,
   };
 }
 
