@@ -80,9 +80,12 @@ export function runClaude(opts: RunOptions): Promise<RunResult> {
 
 /** Does the run output look like an account/usage limit rather than a real
  * failure of the ticket? Limit hits must pause the scheduler, not blame the
- * ticket. */
+ * ticket. Covers the several phrasings the CLI uses, e.g.
+ *   "Claude usage limit reached. Your limit will reset at 6pm (UTC)."
+ *   "You've hit your session limit · resets 2pm (America/New_York)"
+ *   "5-hour limit reached ∙ resets 3pm" */
 export function isLimitError(logText: string): boolean {
-  return /usage limit|limit (?:will )?reset|rate.?limit|overloaded|credit balance|out of credits/i.test(
+  return /usage limit|session limit|limit reached|reached your (?:usage|session )?limit|limit\b[^.\n]{0,15}\bresets?\b|rate.?limit|overloaded|credit balance|out of credits/i.test(
     logText,
   );
 }

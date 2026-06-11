@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runClaude, logTail, buildArgs } from '../src/runner.js';
+import { runClaude, logTail, buildArgs, isLimitError } from '../src/runner.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 let dir: string;
@@ -109,6 +109,32 @@ describe('buildArgs', () => {
 
   it('omits --model when unset and ignores an empty extraArgs array', () => {
     expect(buildArgs({ extraArgs: [] })).toEqual(['-p', '--dangerously-skip-permissions']);
+  });
+});
+
+describe('isLimitError', () => {
+  it('recognises the CLI usage/session/rate limit phrasings', () => {
+    const limits = [
+      "You've hit your session limit · resets 2pm (America/New_York)",
+      'Claude usage limit reached. Your limit will reset at 6pm (UTC).',
+      '5-hour limit reached ∙ resets 3pm',
+      "You've reached your usage limit",
+      'Error: rate limit exceeded',
+      'Overloaded',
+      'Your credit balance is too low',
+      'out of credits',
+    ];
+    for (const msg of limits) expect(isLimitError(msg), msg).toBe(true);
+  });
+
+  it('does not treat a normal failure as a limit', () => {
+    const notLimits = [
+      'TypeError: cannot read property of undefined',
+      'tests failed: 3 of 10',
+      'the rate of progress was slow',
+      'limit the scope of this change',
+    ];
+    for (const msg of notLimits) expect(isLimitError(msg), msg).toBe(false);
   });
 });
 
