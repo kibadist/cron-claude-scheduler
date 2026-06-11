@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });
@@ -37,7 +37,9 @@ export function worktreeHeadSha(worktreePath: string): string {
   return git(worktreePath, ['rev-parse', 'HEAD']).trim();
 }
 
-/** Best-effort cleanup; a leaked temp worktree must never fail the tick. */
+/** Best-effort cleanup; a leaked temp worktree must never fail the tick. Also
+ * removes the mkdtemp parent dir the worktree lived in (addWorktree creates
+ * `<tmpdir>/sched-xxx/wt`), so disposable worktree dirs don't pile up in tmp. */
 export function removeWorktree(projectPath: string, worktreePath: string): void {
   try {
     git(projectPath, ['worktree', 'remove', '--force', worktreePath]);
@@ -47,6 +49,12 @@ export function removeWorktree(projectPath: string, worktreePath: string): void 
     } catch {
       /* ignore */
     }
+  }
+  // `worktreePath` is `<tmpdir>/sched-xxx/wt`; drop the whole `sched-xxx` dir.
+  try {
+    rmSync(dirname(worktreePath), { recursive: true, force: true });
+  } catch {
+    /* ignore — cleanup is best-effort */
   }
 }
 

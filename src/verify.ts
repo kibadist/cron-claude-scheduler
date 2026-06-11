@@ -25,18 +25,44 @@ export interface MergeResult {
   detail: string;
 }
 
-/** Squash-merge the branch's PR and delete the branch. Never throws — a merge
- * failure (conflict, branch protection, gh auth) is reported as a result. */
-export function mergePr(cwd: string, branch: string): MergeResult {
+/** The PR's state for a head branch ("MERGED" | "OPEN" | "CLOSED"), or null
+ * when there is no PR / gh is unavailable. */
+function prState(cwd: string, branch: string): string | null {
   try {
-    execFileSync('gh', ['pr', 'merge', branch, '--squash', '--delete-branch'], {
+    const out = execFileSync('gh', ['pr', 'view', branch, '--json', 'state', '--jq', '.state'], {
       cwd,
       encoding: 'utf8',
-    });
-    return { ok: true, detail: `PR for \`${branch}\` squash-merged; branch deleted` };
-  } catch (e) {
-    return { ok: false, detail: (e as Error).message.trim() };
+    }).trim();
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
   }
+}
+
+/** Squash-merge the branch's PR. Never throws — a merge failure (conflict,
+ * branch protection, gh auth) is reported as a result.
+ *
+ * Deliberately does NOT pass `--delete-branch`: that makes gh also delete the
+ * LOCAL branch, which fails when a (possibly leaked) worktree still has it
+ * checked out — and that post-merge error would mask an already-successful
+ * remote merge, stranding a merged ticket In Review. The remote branch is
+ * deleted best-effort and separately; the local branch/worktree are the
+ * scheduler's own cleanup responsibility. Idempotent: an already-merged PR
+ * (prior run, or this run merging before erroring) counts as success. */
+export function mergePr(cwd: string, branch: string): MergeResult {
+  try {
+    execFileSync('gh', ['pr', 'merge', branch, '--squash'], { cwd, encoding: 'utf8' });
+  } catch (e) {
+    // The merge may have actually landed before gh errored on a later step.
+    if (prState(cwd, branch) !== 'MERGED') return { ok: false, detail: (e as Error).message.trim() };
+  }
+  // Best-effort remote branch deletion — never affects merge success.
+  try {
+    execFileSync('git', ['push', 'origin', '--delete', branch], { cwd, encoding: 'utf8' });
+  } catch {
+    /* remote branch already gone (e.g. GitHub auto-delete) or protected */
+  }
+  return { ok: true, detail: `PR for \`${branch}\` squash-merged` };
 }
 
 /** Post a comment on the branch's PR. Best-effort: returns false when there is

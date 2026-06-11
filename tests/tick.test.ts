@@ -128,16 +128,22 @@ describe('runTick', () => {
     const config = makeConfig(workspace, 'unused-command');
 
     let prompt = '';
+    let imageContent = '';
+    let imagePath = '';
+    // Read the image WHILE claude runs: the disposable worktree (and its sibling
+    // assets dir) is cleaned up once the tick finishes, so the file is gone after.
     const run = async (opts: { prompt: string }): Promise<{ exitCode: number; timedOut: boolean }> => {
       prompt = opts.prompt;
+      imagePath = opts.prompt.match(/^- (\/.+image-1\.png)$/m)![1];
+      imageContent = readFileSync(imagePath, 'utf8');
       return { exitCode: 1, timedOut: false }; // fail fast; we only care about the prompt
     };
     await runTick({ config, linear, paths, run: run as never });
 
     expect(prompt).toContain('Attached images');
     expect(prompt).not.toContain('uploads.linear.app'); // rewritten to a local path
-    const imagePath = prompt.match(/^- (\/.+image-1\.png)$/m)![1];
-    expect(readFileSync(imagePath, 'utf8')).toBe('fake-png-bytes');
+    expect(imageContent).toBe('fake-png-bytes');
+    expect(existsSync(imagePath)).toBe(false); // assets cleaned up with the worktree
   });
 
   it('a stale branch from a previous attempt does not pass verification', async () => {
