@@ -25,10 +25,14 @@ export interface SchedulerState {
   /** issueId -> number of automatic re-implementation attempts triggered by
    * verification failures; cleared when the ticket reaches Done */
   retries: Record<string, number>;
+  /** issueId -> number of automatic merge-conflict resolutions performed for a
+   * verified-but-unmergeable PR; cleared when the ticket reaches Done */
+  resolves: Record<string, number>;
 }
 
 export function loadState(statePath: string): SchedulerState {
-  if (!existsSync(statePath)) return { active: null, skips: {}, branches: {}, retries: {} };
+  if (!existsSync(statePath))
+    return { active: null, skips: {}, branches: {}, retries: {}, resolves: {} };
   try {
     const raw = JSON.parse(readFileSync(statePath, 'utf8')) as Partial<SchedulerState>;
     return {
@@ -36,10 +40,11 @@ export function loadState(statePath: string): SchedulerState {
       skips: raw.skips ?? {},
       branches: raw.branches ?? {},
       retries: raw.retries ?? {},
+      resolves: raw.resolves ?? {},
       ...(raw.pausedUntil !== undefined && { pausedUntil: raw.pausedUntil }),
     };
   } catch {
-    return { active: null, skips: {}, branches: {}, retries: {} };
+    return { active: null, skips: {}, branches: {}, retries: {}, resolves: {} };
   }
 }
 

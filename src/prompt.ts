@@ -111,6 +111,34 @@ ${gitFlowInstructions(project, branch)}
 `;
 }
 
+export function buildResolvePrompt(ticket: TicketInfo, project: ProjectConfig, branch: string): string {
+  return `You are resolving a merge conflict so an already-verified pull request can be merged.
+
+You are in a TEMPORARY, DISPOSABLE git worktree with branch \`${branch}\` (the PR
+branch, whose behavior was already verified) checked out. It currently CANNOT be
+merged because \`${project.baseBranch}\` has advanced and the changes conflict.
+The user's main checkout lives elsewhere — anything you don't push is lost.
+
+${ticketSection(ticket)}
+
+## Required workflow
+
+1. Merge the latest base branch in: \`git merge origin/${project.baseBranch}\`. Git will report conflicts.
+2. Resolve EVERY conflict. Preserve BOTH this ticket's behavior AND the changes already on \`${project.baseBranch}\`; never discard one side wholesale. Remove all conflict markers.
+3. Install dependencies if needed, then run the project's build, lint, and tests. Do NOT proceed while anything fails — keep fixing until they are green.
+4. Commit the merge (\`git add -A && git commit\`), then push: \`git push origin HEAD:${branch}\`.
+5. End your final message with exactly one line:
+   - \`RESOLVED: OK\` — only if \`${project.baseBranch}\` is fully merged in, all conflicts are resolved, the build/tests pass, and you pushed.
+   - \`RESOLVED: FAIL — <short reason>\` — otherwise. If you cannot resolve it safely, push NOTHING and end with this.
+
+## Rules
+
+- You are unattended: do NOT ask questions. Make reasonable decisions and note them in the commit message.
+- Do not change the ticket's intended behavior to dodge a conflict — resolve it properly.
+- Fail closed: if you are not certain the merge is correct and the tests pass, end with RESOLVED: FAIL and push nothing.
+`;
+}
+
 export function buildVerifyPrompt(
   ticket: TicketInfo,
   ref: string,

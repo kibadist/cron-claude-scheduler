@@ -65,6 +65,38 @@ export function mergePr(cwd: string, branch: string): MergeResult {
   return { ok: true, detail: `PR for \`${branch}\` squash-merged` };
 }
 
+/** Does the branch's PR fail to merge specifically because it CONFLICTS with
+ * its base (as opposed to branch protection, required reviews, gh auth, …)?
+ * Only a true conflict is worth spending a claude run to auto-resolve. Returns
+ * false when gh is unavailable or the state can't be determined — conservative,
+ * so we never launch a resolve run on a non-conflict failure. */
+export function isMergeConflict(cwd: string, branch: string): boolean {
+  try {
+    const out = execFileSync(
+      'gh',
+      ['pr', 'view', branch, '--json', 'mergeable,mergeStateStatus', '--jq', '.mergeable + " " + .mergeStateStatus'],
+      { cwd, encoding: 'utf8' },
+    ).trim();
+    return /\bCONFLICTING\b|\bDIRTY\b/.test(out);
+  } catch {
+    return false;
+  }
+}
+
+/** Is origin/<base> fully contained in origin/<branch>? After a successful
+ * conflict resolution the branch must have the base tip merged in and pushed.
+ * This is a deterministic local check (no GitHub mergeability lag), so it's the
+ * fail-closed gate that the resolve actually happened. */
+export function branchContainsBase(cwd: string, branch: string, base: string): boolean {
+  try {
+    git(cwd, ['fetch', 'origin', branch, base]);
+    git(cwd, ['merge-base', '--is-ancestor', `origin/${base}`, `origin/${branch}`]);
+    return true; // exit 0 => base is an ancestor of branch
+  } catch {
+    return false; // non-zero (not an ancestor) or a fetch error
+  }
+}
+
 /** Post a comment on the branch's PR. Best-effort: returns false when there is
  * no PR, gh is missing/unauthenticated, or the repo is not on GitHub. */
 export function commentOnPr(cwd: string, branch: string, body: string): boolean {

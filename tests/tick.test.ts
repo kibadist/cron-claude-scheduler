@@ -219,6 +219,7 @@ describe('runTick', () => {
       skips: {},
       branches: {},
       retries: {},
+      resolves: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
 
@@ -242,6 +243,7 @@ describe('runTick', () => {
       skips: {},
       branches: {},
       retries: {},
+      resolves: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
 

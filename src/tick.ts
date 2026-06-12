@@ -4,10 +4,12 @@ import type { Config, ProjectConfig, TicketInfo } from './types.js';
 import type { LinearGateway } from './linear.js';
 import { acquireLock, releaseLock } from './lock.js';
 import { isPaused, isSkipped, loadState, saveState, type SchedulerState } from './state.js';
-import { branchName, buildPrompt, buildVerifyPrompt } from './prompt.js';
+import { branchName, buildPrompt, buildResolvePrompt, buildVerifyPrompt } from './prompt.js';
 import { isLimitError, logTail, runClaude, type RunResult } from './runner.js';
 import {
+  branchContainsBase,
   commentOnPr,
+  isMergeConflict,
   mergePr,
   remoteBranchExists,
   remoteHeadSha,
@@ -15,6 +17,7 @@ import {
   type VerifyResult,
 } from './verify.js';
 import {
+  addResolveWorktree,
   addVerifyWorktree,
   addWorkWorktree,
   deleteLocalBranch,
@@ -22,7 +25,7 @@ import {
   worktreeHeadSha,
 } from './worktree.js';
 
-export type TickOutcome = 'locked' | 'idle' | 'success' | 'failure' | 'paused';
+export type TickOutcome = 'locked' | 'idle' | 'success' | 'failure' | 'paused' | 'resolved';
 
 export interface TickPaths {
   lock: string;
@@ -38,6 +41,8 @@ export interface TickDeps {
   run?: typeof runClaude;
   /** injectable for tests; defaults to the real gh-based PR merge */
   merge?: typeof mergePr;
+  /** injectable for tests; defaults to the real gh-based conflict check */
+  conflict?: typeof isMergeConflict;
   log?: (msg: string) => void;
 }
 
@@ -303,8 +308,53 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       } else if (project.mergeOnVerified) {
         const merged = (deps.merge ?? mergePr)(project.path, branch);
         if (!merged.ok) {
+          let failDetail = merged.detail;
+          // A genuine conflict (base advanced) is fixable without a human: merge
+          // the base in, resolve, push, then re-verify. Other merge failures
+          // (branch protection, required reviews, gh auth) are not — those skip.
+          const conflicting = (deps.conflict ?? isMergeConflict)(project.path, branch);
+          const resolvesUsed = state.resolves[ticket.id] ?? 0;
+          const maxResolves = config.maxMergeResolves ?? 1;
+
+          if (conflicting && resolvesUsed < maxResolves) {
+            const resolution = await resolveMergeConflict(deps, {
+              ticket,
+              project,
+              branch,
+              logsDir: paths.logsDir,
+            });
+            if (resolution === 'limit') {
+              state.active = null;
+              state.pausedUntil = pauseUntil(config);
+              saveState(paths.state, state);
+              log(`claude usage limit hit resolving ${ticket.identifier}; pausing until ${state.pausedUntil}`);
+              return 'paused';
+            }
+            if (resolution.ok) {
+              const attempt = resolvesUsed + 1;
+              state.resolves[ticket.id] = attempt;
+              const body = [
+                `🤖 Scheduler: verification PASSED but the PR conflicted with \`${project.baseBranch}\`.`,
+                `Auto-resolved it (attempt ${attempt} of ${maxResolves}): merged \`${project.baseBranch}\` in, resolved the conflicts, ran the build/tests, and pushed.`,
+                '',
+                'Re-verifying the updated branch in the browser before merging — the ticket stays In Review.',
+              ].join('\n');
+              await linear.addComment(ticket.id, body);
+              commentOnPr(project.path, branch, body); // best-effort
+              // Leave In Review and DO NOT skip: the next review tick re-verifies
+              // the now-mergeable branch and merges it on a fresh PASS.
+              state.active = null;
+              saveState(paths.state, state);
+              log(`auto-resolved conflict on ${ticket.identifier} (attempt ${attempt}/${maxResolves}); requeued for re-verification`);
+              return 'resolved';
+            }
+            failDetail = `${failDetail}; automatic conflict resolution also failed — ${resolution.detail}`;
+          } else if (conflicting) {
+            failDetail = `${failDetail} (automatic conflict-resolution budget of ${maxResolves} exhausted)`;
+          }
+
           const body = [
-            `🤖 Scheduler: verification PASSED but auto-merge failed — ${merged.detail}.`,
+            `🤖 Scheduler: verification PASSED but auto-merge failed — ${failDetail}.`,
             '',
             'The ticket stays In Review. Resolve the merge problem (conflict, branch',
             'protection, gh auth), then edit or comment on this ticket to retry.',
@@ -316,7 +366,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
           state.skips[ticket.id] = await linear.getUpdatedAt(ticket.id);
           state.active = null;
           saveState(paths.state, state);
-          log(`verified ${ticket.identifier} but auto-merge failed: ${merged.detail}`);
+          log(`verified ${ticket.identifier} but auto-merge failed: ${failDetail}`);
           return 'failure';
         }
         mergeNote = merged.detail;
@@ -340,6 +390,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       delete state.skips[ticket.id];
       delete state.branches[ticket.id]; // ticket is Done; no longer needed
       delete state.retries[ticket.id];
+      delete state.resolves[ticket.id];
       state.active = null;
       saveState(paths.state, state);
       log(`verified ${ticket.identifier}: PASS → ${config.statuses.done}`);
@@ -424,6 +475,75 @@ export async function runAutoTick(deps: TickDeps): Promise<TickOutcome> {
 function pauseUntil(config: Config): string {
   const minutes = config.claude.limitCooldownMinutes ?? 30;
   return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
+/**
+ * Run claude in a disposable worktree to merge the base branch into a verified
+ * PR branch, resolve the conflicts, run the build/tests, and push. Returns
+ * 'limit' when claude hit its usage limit (caller pauses); otherwise an ok/detail
+ * result. Fail-closed: only ok when the run reported RESOLVED: OK AND the base
+ * is now actually merged into the pushed branch.
+ */
+async function resolveMergeConflict(
+  deps: TickDeps,
+  args: { ticket: TicketInfo; project: ProjectConfig; branch: string; logsDir: string },
+): Promise<'limit' | { ok: boolean; detail: string }> {
+  const { config } = deps;
+  const run = deps.run ?? runClaude;
+  const { ticket, project, branch, logsDir } = args;
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const logPath = join(logsDir, `${ticket.identifier}-resolve-${stamp}.log`);
+
+  let worktree: string | undefined;
+  try {
+    worktree = addResolveWorktree(project.path, branch, project.baseBranch);
+    const result = await run({
+      command: config.claude.command,
+      prompt: buildResolvePrompt(ticket, project, branch),
+      cwd: worktree,
+      timeoutMs: config.claude.timeoutMinutes * 60_000,
+      logPath,
+      model: project.model ?? config.claude.model,
+      extraArgs: config.claude.args,
+    });
+    if (isLimitError(logTail(logPath, 50))) return 'limit';
+    const verdict = resolveVerdict(result, logPath, config.claude.timeoutMinutes);
+    if (verdict !== null) return { ok: false, detail: verdict };
+    if (!branchContainsBase(project.path, branch, project.baseBranch))
+      return {
+        ok: false,
+        detail: `\`${branch}\` still does not contain \`${project.baseBranch}\` after the resolution run`,
+      };
+    return { ok: true, detail: `merged \`${project.baseBranch}\` into \`${branch}\` and pushed` };
+  } catch (e) {
+    return {
+      ok: false,
+      detail: `could not prepare the conflict-resolution workspace: ${(e as Error).message}`,
+    };
+  } finally {
+    if (worktree) removeWorktree(project.path, worktree);
+  }
+}
+
+/** null = clean exit with a final RESOLVED: OK marker; otherwise a failure
+ * detail. Fail-closed and last-marker-wins, mirroring reviewVerdict. */
+function resolveVerdict(result: RunResult, logPath: string, timeoutMinutes: number): string | null {
+  if (result.timedOut) return `resolution timed out after ${timeoutMinutes} minutes`;
+  if (result.exitCode !== 0)
+    return result.exitCode === null
+      ? 'claude could not be spawned (is it installed and on PATH?)'
+      : `claude exited with code ${result.exitCode}`;
+  const verdicts = logTail(logPath, Number.MAX_SAFE_INTEGER)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^RESOLVED: (OK|FAIL)\b/.test(l));
+  const last = verdicts.at(-1);
+  if (last !== 'RESOLVED: OK')
+    return last?.startsWith('RESOLVED: FAIL')
+      ? last.replace(/^RESOLVED: FAIL\s*[—-]?\s*/, '').trim() || 'resolution reported FAIL'
+      : 'resolution run ended without a RESOLVED: OK marker';
+  return null;
 }
 
 /** null = verified PASS; otherwise a human-readable failure detail. Fail-closed:

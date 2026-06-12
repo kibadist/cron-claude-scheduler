@@ -67,6 +67,14 @@ export function validateConfig(raw: unknown): Config {
   )
     fail('maxRetries must be a non-negative integer when set');
 
+  if (
+    c.maxMergeResolves !== undefined &&
+    (typeof c.maxMergeResolves !== 'number' ||
+      !Number.isInteger(c.maxMergeResolves) ||
+      c.maxMergeResolves < 0)
+  )
+    fail('maxMergeResolves must be a non-negative integer when set');
+
   if (!Array.isArray(c.projects) || c.projects.length === 0)
     fail('projects must be a non-empty array');
   const projects = (c.projects as unknown[]).map((p, i) => validateProject(p, i));
@@ -92,6 +100,7 @@ export function validateConfig(raw: unknown): Config {
     },
     projects,
     maxRetries: (c.maxRetries as number | undefined) ?? 1,
+    maxMergeResolves: (c.maxMergeResolves as number | undefined) ?? 1,
   };
 }
 

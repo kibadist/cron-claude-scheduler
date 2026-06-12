@@ -222,6 +222,7 @@ describe('runReviewTick', () => {
       skips: {},
       branches: { 'issue-1': BRANCH }, // recorded by the work run
       retries: {},
+      resolves: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -256,6 +257,7 @@ describe('runReviewTick', () => {
       skips: {},
       branches: { 'stale-ticket': 'claude/old-1-gone' },
       retries: {},
+      resolves: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -308,6 +310,7 @@ describe('runReviewTick', () => {
       skips: {},
       branches: {},
       retries: {},
+      resolves: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -330,6 +333,7 @@ describe('runReviewTick', () => {
       skips: {},
       branches: {},
       retries: {},
+      resolves: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-verify-pass.sh'));
 
@@ -376,6 +380,7 @@ describe('runTick with a review-mode active record', () => {
       skips: {},
       branches: {},
       retries: {},
+      resolves: {},
     });
     const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'), 'branch-push');
 

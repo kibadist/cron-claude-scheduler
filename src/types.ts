@@ -45,6 +45,11 @@ export interface Config {
    * in its prompt) before falling back to skip-until-touched
    * (default 1; 0 disables) */
   maxRetries?: number;
+  /** how many times the scheduler will automatically resolve a merge conflict
+   * (merge the base branch in, fix conflicts, re-verify) when an otherwise
+   * verified PR cannot be merged, before falling back to skip-until-touched
+   * (default 1; 0 disables) */
+  maxMergeResolves?: number;
 }
 
 export interface TicketComment {

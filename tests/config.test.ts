@@ -95,6 +95,13 @@ describe('loadConfig', () => {
     expect(() => loadConfig(writeConfig({ maxRetries: 1.5 }))).toThrow(/maxRetries/);
   });
 
+  it('defaults maxMergeResolves to 1 and validates it', () => {
+    expect(loadConfig(writeConfig()).maxMergeResolves).toBe(1);
+    expect(loadConfig(writeConfig({ maxMergeResolves: 0 })).maxMergeResolves).toBe(0);
+    expect(() => loadConfig(writeConfig({ maxMergeResolves: -1 }))).toThrow(/maxMergeResolves/);
+    expect(() => loadConfig(writeConfig({ maxMergeResolves: 2.5 }))).toThrow(/maxMergeResolves/);
+  });
+
   it('leaves model/args undefined by default and validates them', () => {
     const base = loadConfig(writeConfig());
     expect(base.claude.model).toBeUndefined();

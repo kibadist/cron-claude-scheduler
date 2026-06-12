@@ -32,6 +32,20 @@ export function addVerifyWorktree(projectPath: string, branch: string): string {
   return addWorktree(projectPath, `origin/${branch}`, 'sched-verify-');
 }
 
+/**
+ * Disposable worktree with the PR <branch> actually checked out (not detached)
+ * plus origin/<baseBranch> fetched, so a conflict-resolution run can `git merge`
+ * the base in, commit, and `git push` the branch. Throws when a fetch or the
+ * worktree creation fails.
+ */
+export function addResolveWorktree(projectPath: string, branch: string, baseBranch: string): string {
+  git(projectPath, ['fetch', 'origin', branch, baseBranch]);
+  const worktreePath = join(mkdtempSync(join(tmpdir(), 'sched-resolve-')), 'wt');
+  // -B resets/creates the local branch to origin/<branch> and checks it out.
+  git(projectPath, ['worktree', 'add', '-B', branch, worktreePath, `origin/${branch}`]);
+  return worktreePath;
+}
+
 /** The commit a worktree is checked out at — the exact base the agent builds on. */
 export function worktreeHeadSha(worktreePath: string): string {
   return git(worktreePath, ['rev-parse', 'HEAD']).trim();
