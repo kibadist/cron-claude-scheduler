@@ -61,6 +61,44 @@ describe('runTick', () => {
     expect(await runTick({ config, linear: new FakeLinear(), paths })).toBe('idle');
   });
 
+  it('works any non-terminal status, not just Todo (e.g. Backlog)', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    linear.add(makeTicket(), 'Backlog');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
+
+    expect(await runTick({ config, linear, paths })).toBe('success');
+    expect(linear.issues.get('issue-1')!.status).toBe('In Review');
+  });
+
+  it('ignores In Progress, In Review, Done and Canceled tickets (nothing to work)', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    linear.add(makeTicket({ id: 'a', identifier: 'KIB-A' }), 'In Progress');
+    linear.add(makeTicket({ id: 'b', identifier: 'KIB-B' }), 'In Review');
+    linear.add(makeTicket({ id: 'c', identifier: 'KIB-C' }), 'Done');
+    linear.add(makeTicket({ id: 'd', identifier: 'KIB-D' }), 'Canceled');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
+
+    expect(await runTick({ config, linear, paths })).toBe('idle');
+    expect(linear.issues.get('a')!.status).toBe('In Progress'); // left alone
+  });
+
+  it('drains by priority across statuses: an urgent Backlog ticket beats a low Todo', async () => {
+    const { workspace } = makeRepoPair();
+    const linear = new FakeLinear();
+    linear.add(makeTicket({ id: 'low', identifier: 'KIB-LOW', priority: 4 }), 'Todo');
+    linear.add(makeTicket({ id: 'urgent', identifier: 'KIB-URG', priority: 1 }), 'Backlog');
+    const paths = makePaths();
+    const config = makeConfig(workspace, join(FIXTURES, 'fake-claude-push.sh'));
+
+    expect(await runTick({ config, linear, paths })).toBe('success');
+    expect(linear.issues.get('urgent')!.status).toBe('In Review'); // urgent picked though Backlog
+    expect(linear.issues.get('low')!.status).toBe('Todo'); // waits its turn
+  });
+
   it('claude failure: comments, moves back to Todo, skips until the ticket is touched', async () => {
     const { workspace } = makeRepoPair();
     const linear = new FakeLinear();

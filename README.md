@@ -2,7 +2,7 @@
 
 **Turn your Linear board into a work queue for autonomous Claude Code agents.**
 
-Move a ticket to **Todo** in Linear → within minutes, a [Claude Code](https://claude.com/claude-code) agent picks it up, implements it in a disposable worktree of the right local git repository, runs the tests, pushes a branch, opens a pull request, and moves the ticket to **In Review**. When the Todo queue is empty, the same scheduler spends its ticks on the other half: a verification agent checks each In Review ticket **in the browser** against a running local build and moves it to **Done**. You merge PRs; everything else runs itself.
+Point it at a Linear project → within minutes, a [Claude Code](https://claude.com/claude-code) agent picks up any ticket that still needs doing — **any non-terminal status** (Backlog, Todo, Triage, …), not just one column — implements it in a disposable worktree of the right local git repository, runs the tests, pushes a branch, opens a pull request, and moves the ticket to **In Review**. When there's nothing left to implement, the same scheduler spends its ticks on the other half: a verification agent checks each In Review ticket **in the browser** against a running local build and moves it to **Done**. It drains the whole project to Done on its own; you just merge PRs (or let it auto-merge). Tickets a human is mid-flight on (**In Progress**) are left alone.
 
 ```
             ┌──────────────────────── scheduler (launchd tick every N min) ───┐
@@ -122,7 +122,7 @@ Config is validated on startup with specific error messages (missing path, not a
 
 ## The lifecycle of a ticket
 
-1. **Select** — highest-priority (urgent → low, no-priority last), then oldest Todo ticket across your configured projects.
+1. **Select** — highest-priority (urgent → low, no-priority last), then oldest **workable** ticket across your configured projects. Workable = any non-terminal state (by Linear's state *type*: `triage`, `backlog`, `unstarted`) — so Backlog, Todo, and custom "ready" columns all qualify. **In Progress** (a human's, or an active run's), **In Review** (the verify tick owns it), **Done**, and **Canceled** are excluded.
 2. **Claim** — ticket moves to *In Progress*; the claim is persisted locally first, so a crash at any point is recoverable.
 3. **Run** — `claude -p --dangerously-skip-permissions` is spawned in a **disposable git worktree** of the tip of `baseBranch` (your main checkout is never touched — no branch switches, no dirty-tree collisions), with a prompt built from the ticket's title, description, and comments, the **Linear project's description as shared context** (write your product thesis once per project instead of repeating it in every ticket), plus the git-flow instructions. The repo's own `CLAUDE.md` applies too, as in any claude session. **Images pasted into the ticket** (screenshots, design mocks) are downloaded with your API key and handed to the agent as local files it actually looks at — both here and during verification. Output streams to `logs/<TICKET>-<timestamp>.log`. The worktree is removed after the run; only what was pushed survives.
 4. **Verify** — the scheduler checks the remote itself; the agent's claims are never trusted.
@@ -135,7 +135,7 @@ Config is validated on startup with specific error messages (missing path, not a
 
 | Command | What it does |
 |---|---|
-| `npm run tick` | Run one tick: work the Todo queue, or verify an In Review ticket when Todo is empty |
+| `npm run tick` | Run one tick: implement the next workable ticket, or verify an In Review ticket when there's nothing left to implement |
 | `npm run loop` | Run ticks continuously in a terminal (any OS; safe alongside launchd — the lockfile prevents overlap) |
 | `npm run work` | One work-only tick (skip verification) |
 | `npm run review` | One verification-only tick (see below) |
@@ -149,7 +149,7 @@ Logs: `logs/<TICKET>-<timestamp>.log` per work run, `logs/<TICKET>-verify-<times
 
 ## Verification mode (`npm run review`)
 
-The second half of the loop: instead of you reviewing every In Review ticket by hand, a verification agent checks the work **in the browser** and closes the ticket. The default tick does this automatically whenever the Todo queue is empty; `npm run review` forces a verification-only tick.
+The second half of the loop: instead of you reviewing every In Review ticket by hand, a verification agent checks the work **in the browser** and closes the ticket. The default tick does this automatically whenever there's nothing left to implement; `npm run review` forces a verification-only tick.
 
 For each **In Review** ticket, the scheduler:
 

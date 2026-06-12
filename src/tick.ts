@@ -62,7 +62,7 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     }
 
     const projectNames = config.projects.map((p) => p.linearProject);
-    const issues = await linear.fetchTodoIssues(projectNames, config.statuses.todo);
+    const issues = await linear.fetchWorkableIssues(projectNames);
     const eligible = issues.filter((t) => !isSkipped(state, t.id, t.updatedAt));
     if (eligible.length === 0) return 'idle';
 
@@ -220,7 +220,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     }
 
     const projectNames = config.projects.map((p) => p.linearProject);
-    const issues = await linear.fetchTodoIssues(projectNames, config.statuses.inReview);
+    const issues = await linear.fetchIssuesByStatus(projectNames, config.statuses.inReview);
     const eligible = issues.filter((t) => !isSkipped(state, t.id, t.updatedAt));
 
     // Evict branch records for tickets that left In Review by any path other

@@ -37,10 +37,30 @@ export class FakeLinear implements LinearGateway {
     return this.images.get(url) ?? null;
   }
 
-  async fetchTodoIssues(projectNames: string[], todoStatus: string): Promise<TicketInfo[]> {
+  // The real gateway decides workability by Linear state TYPE; the fake stores
+  // only status names, so it approximates with the well-known non-workable names
+  // (started/terminal states the scheduler manages itself).
+  private static readonly NON_WORKABLE = new Set([
+    'in progress',
+    'in review',
+    'done',
+    'canceled',
+    'cancelled',
+  ]);
+
+  async fetchIssuesByStatus(projectNames: string[], statusName: string): Promise<TicketInfo[]> {
     const names = projectNames.map((n) => n.toLowerCase());
     return [...this.issues.values()]
-      .filter((i) => i.status.toLowerCase() === todoStatus.toLowerCase())
+      .filter((i) => i.status.toLowerCase() === statusName.toLowerCase())
+      .filter((i) => names.includes(i.ticket.projectName.toLowerCase()))
+      .map((i) => ({ ...i.ticket }))
+      .sort(compareTickets);
+  }
+
+  async fetchWorkableIssues(projectNames: string[]): Promise<TicketInfo[]> {
+    const names = projectNames.map((n) => n.toLowerCase());
+    return [...this.issues.values()]
+      .filter((i) => !FakeLinear.NON_WORKABLE.has(i.status.toLowerCase()))
       .filter((i) => names.includes(i.ticket.projectName.toLowerCase()))
       .map((i) => ({ ...i.ticket }))
       .sort(compareTickets);
