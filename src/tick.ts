@@ -60,7 +60,27 @@ export interface TickDeps {
   update?: typeof updateBranchToBase;
   /** injectable for tests; defaults to a notifier built from config.notifications */
   notify?: Notifier;
+  /** --loop mode only: free the lock during the (long) claude run so the
+   * same-process Telegram bot poller can handle commands mid-run, re-acquiring
+   * and reloading state afterward. Unsafe for overlapping one-shot invocations
+   * (they rely on the lock being held throughout), so it defaults off. */
+  releaseLockForBot?: boolean;
   log?: (msg: string) => void;
+}
+
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Re-take the lock after it was freed for the bot during a claude run. The only
+ * other holder is this process's bot poller, which holds it solely across brief
+ * synchronous state writes (never across an await), so a short spin always wins.
+ * Forces a takeover after ~10s as a deadlock backstop. */
+async function reacquireLock(lockPath: string): Promise<boolean> {
+  for (let i = 0; i < 200; i++) {
+    if (acquireLock(lockPath)) return true;
+    await delay(50);
+  }
+  releaseLock(lockPath);
+  return acquireLock(lockPath);
 }
 
 export async function runTick(deps: TickDeps): Promise<TickOutcome> {
@@ -69,8 +89,9 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
   const log = deps.log ?? (() => {});
 
   if (!acquireLock(paths.lock)) return 'locked';
+  let holdingLock = true;
   try {
-    const state = loadState(paths.state);
+    let state = loadState(paths.state);
     await recoverInterrupted(state, deps);
 
     if (isPaused(state)) {
@@ -108,6 +129,15 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     };
     saveState(paths.state, state);
     await linear.moveIssue(ticket.id, config.statuses.inProgress);
+
+    // Free the lock for the duration of the claude run so the bot poller can
+    // act (e.g. /status, /pause) while we work. We re-acquire and reload state
+    // afterward, picking up any bot changes; our `active` claim (saved above,
+    // never touched by the bot) survives the reload.
+    if (deps.releaseLockForBot) {
+      releaseLock(paths.lock);
+      holdingLock = false;
+    }
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const logPath = join(paths.logsDir, `${ticket.identifier}-${stamp}.log`);
@@ -152,6 +182,12 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
         // pushed remote branch is what verification and review use.
         if (project.gitFlow !== 'main-push') deleteLocalBranch(project.path, branch);
       }
+    }
+
+    if (!holdingLock) {
+      holdingLock = await reacquireLock(paths.lock);
+      state = loadState(paths.state); // re-read to capture bot mutations during the run
+      state.active = state.active ?? { issueId: ticket.id, identifier: ticket.identifier, startedAt: stamp, mode: 'work' };
     }
 
     if (verdict.ok) {
@@ -214,7 +250,7 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     log(`failed ${ticket.identifier}: ${verdict.detail}`);
     return 'failure';
   } finally {
-    releaseLock(paths.lock);
+    if (holdingLock) releaseLock(paths.lock);
   }
 }
 
@@ -256,8 +292,9 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
   const log = deps.log ?? (() => {});
 
   if (!acquireLock(paths.lock)) return 'locked';
+  let holdingLock = true;
   try {
-    const state = loadState(paths.state);
+    let state = loadState(paths.state);
     await recoverInterrupted(state, deps);
 
     if (isPaused(state)) {
@@ -320,6 +357,12 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     };
     saveState(paths.state, state);
 
+    // Free the lock during the (long) verification run so the bot poller can act.
+    if (deps.releaseLockForBot) {
+      releaseLock(paths.lock);
+      holdingLock = false;
+    }
+
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const logPath = join(paths.logsDir, `${ticket.identifier}-verify-${stamp}.log`);
 
@@ -346,6 +389,12 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       prepFailed = true; // environmental — re-implementing the ticket won't fix it
     } finally {
       if (worktree) removeWorktree(project.path, worktree);
+    }
+
+    if (!holdingLock) {
+      holdingLock = await reacquireLock(paths.lock);
+      state = loadState(paths.state); // re-read to capture bot mutations during the run
+      state.active = state.active ?? { issueId: ticket.id, identifier: ticket.identifier, startedAt: stamp, mode: 'review' };
     }
 
     if (detail === null) {
@@ -577,7 +626,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     log(`verification failed ${ticket.identifier}: ${detail}`);
     return 'failure';
   } finally {
-    releaseLock(paths.lock);
+    if (holdingLock) releaseLock(paths.lock);
   }
 }
 

@@ -1,5 +1,5 @@
 import { acquireLock, releaseLock } from './lock.js';
-import { loadState, saveState, type SchedulerState } from './state.js';
+import { isPaused, loadState, saveState, type SchedulerState } from './state.js';
 import type { Config } from './types.js';
 import type { TickPaths } from './tick.js';
 
@@ -170,7 +170,9 @@ function resume(state: SchedulerState): string {
 function status(state: SchedulerState): string {
   const lines: string[] = [];
   lines.push(state.active ? `▶️ Working ${state.active.identifier} (${state.active.mode ?? 'work'})` : '💤 Idle');
-  if (state.pausedUntil !== undefined) {
+  // Only report a pause that is still in effect — a past `pausedUntil` lingers in
+  // state after the scheduler has already auto-resumed, and must not read as paused.
+  if (isPaused(state)) {
     lines.push(
       state.pausedUntil === MANUAL_PAUSE_UNTIL
         ? '⏸ Manually paused (send /resume)'

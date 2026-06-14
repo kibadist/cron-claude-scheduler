@@ -31,13 +31,30 @@ async function main(): Promise<void> {
       ? ([runTick, 'work tick'] as const)
       : ([runAutoTick, 'tick'] as const);
 
+  // The Telegram control bot runs only as a long-lived loop with a telegram
+  // channel: a background poller drains commands every few seconds — including
+  // mid-tick, because the tick frees its lock during the claude run (see
+  // releaseLockForBot). One-shot runs and non-telegram setups skip both.
+  const botActive = loop && config.notifications?.type === 'telegram';
+  let botBusy = false;
+  if (botActive) {
+    const timer = setInterval(() => {
+      if (botBusy) return;
+      botBusy = true;
+      processBotUpdates({ config, paths, log })
+        .catch((e: unknown) => log(`bot poll error: ${describeError(e)}`))
+        .finally(() => {
+          botBusy = false;
+        });
+    }, 8_000);
+    timer.unref(); // the tick loop, not this timer, keeps the process alive
+    log('Telegram control bot active (polling every 8s)');
+  }
+
   do {
     log(`${label} starting (pid ${process.pid})`);
     try {
-      // Drain Telegram commands/taps first so /pause and /resume take effect
-      // even while the scheduler is paused (a paused tick does nothing else).
-      await processBotUpdates({ config, paths, log });
-      const outcome = await tick({ config, linear, paths, log, notify });
+      const outcome = await tick({ config, linear, paths, log, notify, releaseLockForBot: botActive });
       log(`${label}: ${outcome}`);
     } catch (err) {
       // A transient Linear/network error must not kill the loop (or spew a

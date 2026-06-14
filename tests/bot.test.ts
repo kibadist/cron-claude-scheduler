@@ -94,6 +94,20 @@ describe('processBotUpdates', () => {
     expect(sent[0].text).toContain('Cooling: 1');
   });
 
+  it('/status does not report a stale (past) pause but does report a current one', async () => {
+    const paths = makePaths();
+
+    seed(paths.state, { pausedUntil: '2000-01-01T00:00:00.000Z' }); // long past → auto-resumed
+    const fc1 = fakeClient([msg(1, '/status')]);
+    await processBotUpdates({ config: config(), paths, client: fc1.client });
+    expect(fc1.sent[0].text).not.toContain('Paused');
+
+    seed(paths.state, { pausedUntil: MANUAL_PAUSE_UNTIL });
+    const fc2 = fakeClient([msg(2, '/status')]);
+    await processBotUpdates({ config: config(), paths, client: fc2.client });
+    expect(fc2.sent[0].text).toContain('Manually paused');
+  });
+
   it('/retry <identifier> clears that ticket and resolves the label', async () => {
     const paths = makePaths();
     seed(paths.state, { skips: { i1: 'ts' }, labels: { i1: 'DET-9' } });

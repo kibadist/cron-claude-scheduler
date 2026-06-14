@@ -201,7 +201,9 @@ If your `notifications.type` is `telegram`, the same bot becomes **two-way** —
 
 Park alerts show **🔁 Retry this ticket** / **⏸ Pause scheduler**; a breaker-halt alert shows **▶️ Resume now**.
 
-The bot is polled **once per tick** (no extra process), so commands take effect within one `pollIntervalMinutes`. Only your configured `chatId` is honoured — messages from anyone else are ignored. Updates are processed exactly once via a persisted cursor, and `/pause`/`/resume` work even while the scheduler is paused.
+A background poller (no extra process) drains commands **every ~8 seconds**, including *while a ticket is being worked* — the tick frees its lock during the Claude run, so `/status` and `/pause` stay responsive even mid-run. Only your configured `chatId` is honoured; messages from anyone else are ignored. Updates are processed exactly once via a persisted cursor, and `/pause`/`/resume` work even while the scheduler is paused.
+
+`/pause` does **not** kill an in-flight Claude run — the current ticket finishes, then no new work starts. (The bot only runs in `--loop` mode; one-shot/launchd ticks hold their lock throughout and don't poll.)
 
 ## Safety notes
 
