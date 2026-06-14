@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import type { ProjectConfig } from './types.js';
+import { addResolveWorktree, removeWorktree } from './worktree.js';
 
 export interface VerifyResult {
   ok: boolean;
@@ -81,6 +82,61 @@ export function isMergeConflict(cwd: string, branch: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Does the branch's PR fail to merge only because it is BEHIND its base — no
+ * conflicts, just out of date (the "require branches to be up to date before
+ * merging" branch-protection rule)? Unlike a real conflict this is fixable
+ * deterministically (merge the base in, push) with no claude run needed. False
+ * when conflicting, current, unknown, or gh unavailable — conservative, so a
+ * non-BEHIND failure never triggers the cheap update path. */
+export function isMergeBehind(cwd: string, branch: string): boolean {
+  try {
+    const out = execFileSync(
+      'gh',
+      ['pr', 'view', branch, '--json', 'mergeable,mergeStateStatus', '--jq', '.mergeable + " " + .mergeStateStatus'],
+      { cwd, encoding: 'utf8' },
+    ).trim();
+    if (/\bCONFLICTING\b|\bDIRTY\b/.test(out)) return false; // a real conflict, not just stale
+    return /\bBEHIND\b/.test(out);
+  } catch {
+    return false;
+  }
+}
+
+/** Bring <branch> up to date with its base by merging origin/<baseBranch> in and
+ * pushing — the deterministic fix for a BEHIND (out-of-date, conflict-free) PR.
+ * No claude run: there is nothing to resolve. If the merge unexpectedly conflicts
+ * (gh's BEHIND status was stale and the base actually clashes), it aborts cleanly
+ * and reports failure so the caller can fall through to the conflict path. Never
+ * throws. Fail-closed: only ok when the base is actually an ancestor of the
+ * pushed branch afterwards. */
+export function updateBranchToBase(projectPath: string, branch: string, baseBranch: string): MergeResult {
+  let worktree: string | undefined;
+  try {
+    worktree = addResolveWorktree(projectPath, branch, baseBranch);
+    try {
+      git(worktree, ['merge', '--no-edit', `origin/${baseBranch}`]);
+    } catch (e) {
+      try {
+        git(worktree, ['merge', '--abort']);
+      } catch {
+        /* nothing to abort */
+      }
+      return {
+        ok: false,
+        detail: `merging \`${baseBranch}\` in unexpectedly conflicted: ${(e as Error).message.trim()}`,
+      };
+    }
+    git(worktree, ['push', 'origin', `HEAD:${branch}`]);
+  } catch (e) {
+    return { ok: false, detail: `could not update \`${branch}\` from \`${baseBranch}\`: ${(e as Error).message.trim()}` };
+  } finally {
+    if (worktree) removeWorktree(projectPath, worktree);
+  }
+  if (!branchContainsBase(projectPath, branch, baseBranch))
+    return { ok: false, detail: `\`${branch}\` still does not contain \`${baseBranch}\` after the update` };
+  return { ok: true, detail: `merged \`${baseBranch}\` into \`${branch}\` and pushed` };
 }
 
 /** Is origin/<base> fully contained in origin/<branch>? After a successful

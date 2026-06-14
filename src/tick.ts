@@ -9,10 +9,12 @@ import { isLimitError, logTail, runClaude, type RunResult } from './runner.js';
 import {
   branchContainsBase,
   commentOnPr,
+  isMergeBehind,
   isMergeConflict,
   mergePr,
   remoteBranchExists,
   remoteHeadSha,
+  updateBranchToBase,
   verifyWork,
   type VerifyResult,
 } from './verify.js';
@@ -43,6 +45,10 @@ export interface TickDeps {
   merge?: typeof mergePr;
   /** injectable for tests; defaults to the real gh-based conflict check */
   conflict?: typeof isMergeConflict;
+  /** injectable for tests; defaults to the real gh-based "behind base" check */
+  behind?: typeof isMergeBehind;
+  /** injectable for tests; defaults to the real git-based branch update */
+  update?: typeof updateBranchToBase;
   log?: (msg: string) => void;
 }
 
@@ -309,20 +315,25 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
         const merged = (deps.merge ?? mergePr)(project.path, branch);
         if (!merged.ok) {
           let failDetail = merged.detail;
-          // A genuine conflict (base advanced) is fixable without a human: merge
-          // the base in, resolve, push, then re-verify. Other merge failures
-          // (branch protection, required reviews, gh auth) are not — those skip.
+          // Two merge failures are auto-fixable without a human, both bounded by
+          // maxMergeResolves and both followed by browser re-verification before
+          // the actual merge:
+          //   - CONFLICTING/DIRTY: the base advanced AND clashes — needs a claude
+          //     run to merge the base in and resolve.
+          //   - BEHIND: out of date but conflict-free (the "require branches up to
+          //     date" rule) — fixed deterministically by merging the base in, no
+          //     claude run needed.
+          // Anything else (branch protection, required reviews, gh auth) is not
+          // auto-fixable and falls through to the skip-until-touched comment.
           const conflicting = (deps.conflict ?? isMergeConflict)(project.path, branch);
+          const behind = !conflicting && (deps.behind ?? isMergeBehind)(project.path, branch);
           const resolvesUsed = state.resolves[ticket.id] ?? 0;
           const maxResolves = config.maxMergeResolves ?? 1;
 
-          if (conflicting && resolvesUsed < maxResolves) {
-            const resolution = await resolveMergeConflict(deps, {
-              ticket,
-              project,
-              branch,
-              logsDir: paths.logsDir,
-            });
+          if ((conflicting || behind) && resolvesUsed < maxResolves) {
+            const resolution = behind
+              ? (deps.update ?? updateBranchToBase)(project.path, branch, project.baseBranch)
+              : await resolveMergeConflict(deps, { ticket, project, branch, logsDir: paths.logsDir });
             if (resolution === 'limit') {
               state.active = null;
               state.pausedUntil = pauseUntil(config);
@@ -333,9 +344,12 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
             if (resolution.ok) {
               const attempt = resolvesUsed + 1;
               state.resolves[ticket.id] = attempt;
+              const action = behind
+                ? `Auto-updated it (attempt ${attempt} of ${maxResolves}): the PR was behind \`${project.baseBranch}\` (no conflicts), so merged \`${project.baseBranch}\` in and pushed.`
+                : `Auto-resolved it (attempt ${attempt} of ${maxResolves}): merged \`${project.baseBranch}\` in, resolved the conflicts, ran the build/tests, and pushed.`;
               const body = [
-                `🤖 Scheduler: verification PASSED but the PR conflicted with \`${project.baseBranch}\`.`,
-                `Auto-resolved it (attempt ${attempt} of ${maxResolves}): merged \`${project.baseBranch}\` in, resolved the conflicts, ran the build/tests, and pushed.`,
+                `🤖 Scheduler: verification PASSED but the PR could not merge — it ${behind ? 'was out of date' : `conflicted`} with \`${project.baseBranch}\`.`,
+                action,
                 '',
                 'Re-verifying the updated branch in the browser before merging — the ticket stays In Review.',
               ].join('\n');
@@ -345,12 +359,12 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
               // the now-mergeable branch and merges it on a fresh PASS.
               state.active = null;
               saveState(paths.state, state);
-              log(`auto-resolved conflict on ${ticket.identifier} (attempt ${attempt}/${maxResolves}); requeued for re-verification`);
+              log(`auto-${behind ? 'updated' : 'resolved'} ${ticket.identifier} (attempt ${attempt}/${maxResolves}); requeued for re-verification`);
               return 'resolved';
             }
-            failDetail = `${failDetail}; automatic conflict resolution also failed — ${resolution.detail}`;
-          } else if (conflicting) {
-            failDetail = `${failDetail} (automatic conflict-resolution budget of ${maxResolves} exhausted)`;
+            failDetail = `${failDetail}; automatic ${behind ? 'branch update' : 'conflict resolution'} also failed — ${resolution.detail}`;
+          } else if (conflicting || behind) {
+            failDetail = `${failDetail} (automatic merge-heal budget of ${maxResolves} exhausted)`;
           }
 
           const body = [
