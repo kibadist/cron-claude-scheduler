@@ -3,11 +3,20 @@ import { prepareTicketAssets } from './assets.js';
 import type { Config, ProjectConfig, TicketInfo } from './types.js';
 import type { LinearGateway } from './linear.js';
 import { acquireLock, releaseLock } from './lock.js';
-import { isPaused, isSkipped, loadState, saveState, type SchedulerState } from './state.js';
+import {
+  isCoolingDown,
+  isPaused,
+  isSkipped,
+  loadState,
+  saveState,
+  type SchedulerState,
+} from './state.js';
+import { makeNotifier, type NotifyButton, type Notifier } from './notify.js';
 import { branchName, buildPrompt, buildResolvePrompt, buildVerifyPrompt } from './prompt.js';
 import { isLimitError, logTail, runClaude, type RunResult } from './runner.js';
 import {
   branchContainsBase,
+  classifyFailure,
   commentOnPr,
   isMergeBehind,
   isMergeConflict,
@@ -49,6 +58,8 @@ export interface TickDeps {
   behind?: typeof isMergeBehind;
   /** injectable for tests; defaults to the real git-based branch update */
   update?: typeof updateBranchToBase;
+  /** injectable for tests; defaults to a notifier built from config.notifications */
+  notify?: Notifier;
   log?: (msg: string) => void;
 }
 
@@ -69,7 +80,9 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
 
     const projectNames = config.projects.map((p) => p.linearProject);
     const issues = await linear.fetchWorkableIssues(projectNames);
-    const eligible = issues.filter((t) => !isSkipped(state, t.id, t.updatedAt));
+    const eligible = issues.filter(
+      (t) => !isSkipped(state, t.id, t.updatedAt) && !isCoolingDown(state, t.id),
+    );
     if (eligible.length === 0) return 'idle';
 
     const ticket = eligible[0];
@@ -81,6 +94,7 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
     const branch = branchName(ticket.identifier, ticket.title);
 
     log(`working ${ticket.identifier} in ${project.path}`);
+    state.labels[ticket.id] = ticket.identifier; // so the bot can name/resolve it
     // Persist the claim BEFORE moving the ticket in Linear. A crash in this
     // window leaves `active` set with the ticket still in Todo, so the next
     // tick's recovery fires harmlessly (Todo→Todo) and the ticket stays
@@ -144,6 +158,7 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
       await linear.addComment(ticket.id, successComment(verdict, branch, project));
       await linear.moveIssue(ticket.id, config.statuses.inReview);
       delete state.skips[ticket.id];
+      clearBreaker(state, ticket.id); // a success ends any failure streak
       // Remember the pushed branch so the review tick still finds it if the
       // ticket's title gets edited later.
       if (project.gitFlow !== 'main-push') state.branches[ticket.id] = branch;
@@ -165,11 +180,36 @@ export async function runTick(deps: TickDeps): Promise<TickOutcome> {
       return 'paused';
     }
 
+    // A transient/environmental failure (workspace prep, network) is not the
+    // ticket's fault: move it out of In Progress and back off with an
+    // auto-lifting cooldown instead of parking it for a human.
+    const kind = classifyFailure(verdict.detail, logTail(logPath, 50));
+    if (kind === 'transient' && nextTransientStep(deps, state, ticket.id) === 'cooldown') {
+      const cd = state.cooldowns[ticket.id];
+      await linear.moveIssue(ticket.id, config.statuses.todo);
+      await linear.addComment(
+        ticket.id,
+        transientComment(verdict.detail, cd.count, deps.config.autonomy?.maxTransientRetries ?? 4, cd.until),
+      );
+      state.active = null;
+      await recordBreakerFailure(deps, state);
+      saveState(paths.state, state);
+      log(`transient failure on ${ticket.identifier}; cooling down until ${cd.until}`);
+      return 'failure';
+    }
+
     await linear.addComment(ticket.id, failureComment(verdict.detail, logTail(logPath)));
     await linear.moveIssue(ticket.id, config.statuses.todo);
     // Re-fetch updatedAt AFTER our own writes so our comment/move don't count as "user touched it".
     state.skips[ticket.id] = await linear.getUpdatedAt(ticket.id);
+    delete state.cooldowns[ticket.id];
     state.active = null;
+    await recordBreakerFailure(deps, state);
+    await escalate(
+      deps,
+      `🛑 ${ticket.identifier} parked — the work run could not produce a passing result: ${verdict.detail}. It stays skipped until you edit or comment on it in Linear.`,
+      parkButtons(ticket.id),
+    );
     saveState(paths.state, state);
     log(`failed ${ticket.identifier}: ${verdict.detail}`);
     return 'failure';
@@ -227,7 +267,9 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
 
     const projectNames = config.projects.map((p) => p.linearProject);
     const issues = await linear.fetchIssuesByStatus(projectNames, config.statuses.inReview);
-    const eligible = issues.filter((t) => !isSkipped(state, t.id, t.updatedAt));
+    const eligible = issues.filter(
+      (t) => !isSkipped(state, t.id, t.updatedAt) && !isCoolingDown(state, t.id),
+    );
 
     // Evict branch records for tickets that left In Review by any path other
     // than our own PASS (merged/cancelled/moved manually) so the map stays
@@ -269,6 +311,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     const { ticket, project, branch, onBase } = picked;
 
     log(`verifying ${ticket.identifier} (${onBase ? `tip of ${branch}` : branch})`);
+    state.labels[ticket.id] = ticket.identifier; // so the bot can name/resolve it
     state.active = {
       issueId: ticket.id,
       identifier: ticket.identifier,
@@ -357,6 +400,7 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
               commentOnPr(project.path, branch, body); // best-effort
               // Leave In Review and DO NOT skip: the next review tick re-verifies
               // the now-mergeable branch and merges it on a fresh PASS.
+              clearBreaker(state, ticket.id); // a successful heal ends the streak
               state.active = null;
               saveState(paths.state, state);
               log(`auto-${behind ? 'updated' : 'resolved'} ${ticket.identifier} (attempt ${attempt}/${maxResolves}); requeued for re-verification`);
@@ -365,6 +409,28 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
             failDetail = `${failDetail}; automatic ${behind ? 'branch update' : 'conflict resolution'} also failed — ${resolution.detail}`;
           } else if (conflicting || behind) {
             failDetail = `${failDetail} (automatic merge-heal budget of ${maxResolves} exhausted)`;
+          }
+
+          // A transient merge failure (gh auth, network) may clear on its own:
+          // back off and retry the merge later instead of parking for a human.
+          if (
+            classifyFailure(failDetail) === 'transient' &&
+            nextTransientStep(deps, state, ticket.id) === 'cooldown'
+          ) {
+            const cd = state.cooldowns[ticket.id];
+            const body = transientComment(
+              `auto-merge could not complete — ${failDetail}`,
+              cd.count,
+              deps.config.autonomy?.maxTransientRetries ?? 4,
+              cd.until,
+            );
+            await linear.addComment(ticket.id, body);
+            commentOnPr(project.path, branch, body);
+            state.active = null;
+            await recordBreakerFailure(deps, state);
+            saveState(paths.state, state);
+            log(`transient merge failure on ${ticket.identifier}; cooling down until ${cd.until}`);
+            return 'failure';
           }
 
           const body = [
@@ -378,7 +444,14 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
             log(`could not comment on the PR for ${branch} (no PR or gh unavailable)`);
           }
           state.skips[ticket.id] = await linear.getUpdatedAt(ticket.id);
+          delete state.cooldowns[ticket.id];
           state.active = null;
+          await recordBreakerFailure(deps, state);
+          await escalate(
+            deps,
+            `🛑 ${ticket.identifier} parked — verification passed but the PR cannot be merged: ${failDetail}. Likely needs a human (branch protection, a required review, or gh auth). It stays In Review until you edit or comment on it in Linear.`,
+            parkButtons(ticket.id),
+          );
           saveState(paths.state, state);
           log(`verified ${ticket.identifier} but auto-merge failed: ${failDetail}`);
           return 'failure';
@@ -396,7 +469,13 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
           `🤖 Scheduler: verification PASSED but the ticket could not be moved to "${config.statuses.done}": ${(e as Error).message}. Check statuses.done in config.json, then edit or comment on this ticket to retry.`,
         );
         state.skips[ticket.id] = await linear.getUpdatedAt(ticket.id);
+        delete state.cooldowns[ticket.id];
         state.active = null;
+        await recordBreakerFailure(deps, state);
+        await escalate(
+          deps,
+          `🛑 ${ticket.identifier} verified but could not be moved to "${config.statuses.done}": ${(e as Error).message}. This is a config problem (check statuses.done in config.json).`,
+        );
         saveState(paths.state, state);
         log(`verified ${ticket.identifier} but could not move to ${config.statuses.done}`);
         return 'failure';
@@ -405,6 +484,8 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       delete state.branches[ticket.id]; // ticket is Done; no longer needed
       delete state.retries[ticket.id];
       delete state.resolves[ticket.id];
+      delete state.labels[ticket.id];
+      clearBreaker(state, ticket.id); // a Done ticket ends the failure streak
       state.active = null;
       saveState(paths.state, state);
       log(`verified ${ticket.identifier}: PASS → ${config.statuses.done}`);
@@ -421,13 +502,29 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       return 'paused';
     }
 
-    // Auto-retry: hand the ticket back to the work agent by moving it to Todo
-    // ourselves — the verifier's findings (the comment below) become part of
-    // the next work prompt. Environmental failures (workspace prep) are
-    // excluded: re-implementing won't fix a network problem.
+    // A transient/environmental failure (workspace prep, network, dev server)
+    // is not the work being wrong: back off with an auto-lifting cooldown and
+    // do NOT burn a re-implementation attempt.
+    const kind = classifyFailure(detail, logTail(logPath, 50));
+    if (kind === 'transient' && nextTransientStep(deps, state, ticket.id) === 'cooldown') {
+      const cd = state.cooldowns[ticket.id];
+      const body = transientComment(detail, cd.count, config.autonomy?.maxTransientRetries ?? 4, cd.until);
+      await linear.addComment(ticket.id, body);
+      if (!onBase) commentOnPr(project.path, branch, body);
+      state.active = null;
+      await recordBreakerFailure(deps, state);
+      saveState(paths.state, state);
+      log(`transient verification failure on ${ticket.identifier}; cooling down until ${cd.until}`);
+      return 'failure';
+    }
+
+    // Auto-retry a GENUINE failure: hand the ticket back to the work agent by
+    // moving it to Todo — the verifier's findings (the comment below) become
+    // part of the next work prompt. (Exhausted-transient failures fall straight
+    // through to the park below; re-implementing won't fix an env problem.)
     const retriesUsed = state.retries[ticket.id] ?? 0;
     const maxRetries = config.maxRetries ?? 1;
-    if (!prepFailed && retriesUsed < maxRetries) {
+    if (kind === 'genuine' && !prepFailed && retriesUsed < maxRetries) {
       const attempt = retriesUsed + 1;
       const body = [
         `🤖 Scheduler: browser verification FAILED — ${detail}.`,
@@ -447,13 +544,14 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
       state.retries[ticket.id] = attempt;
       // Deliberately NO skip entry: the ticket must be picked up by a work tick.
       state.active = null;
+      await recordBreakerFailure(deps, state); // a failed verification counts toward the breaker
       saveState(paths.state, state);
       log(`verification failed ${ticket.identifier}; sent back to ${config.statuses.todo} (attempt ${attempt}/${maxRetries})`);
       return 'failure';
     }
 
     const exhausted =
-      !prepFailed && maxRetries > 0
+      kind === 'genuine' && !prepFailed && maxRetries > 0
         ? `\n\nAutomatic re-implementation attempts exhausted (${maxRetries}).`
         : '';
     const body = verifyFailureComment(detail, logTail(logPath)) + exhausted;
@@ -465,7 +563,16 @@ export async function runReviewTick(deps: TickDeps): Promise<TickOutcome> {
     // Ticket stays In Review. Re-fetch updatedAt AFTER our writes so our own
     // comment doesn't count as "user touched it".
     state.skips[ticket.id] = await linear.getUpdatedAt(ticket.id);
+    delete state.cooldowns[ticket.id];
     state.active = null;
+    await recordBreakerFailure(deps, state);
+    await escalate(
+      deps,
+      `🛑 ${ticket.identifier} parked — browser verification keeps failing: ${detail}. ${
+        kind === 'genuine' && maxRetries > 0 ? 'Re-implementation attempts are exhausted.' : ''
+      } It stays In Review until you edit or comment on it in Linear.`.trim(),
+      parkButtons(ticket.id),
+    );
     saveState(paths.state, state);
     log(`verification failed ${ticket.identifier}: ${detail}`);
     return 'failure';
@@ -489,6 +596,81 @@ export async function runAutoTick(deps: TickDeps): Promise<TickOutcome> {
 function pauseUntil(config: Config): string {
   const minutes = config.claude.limitCooldownMinutes ?? 30;
   return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
+function haltUntil(config: Config): string {
+  const minutes = config.autonomy?.haltCooldownMinutes ?? 60;
+  return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
+function cooldownUntil(config: Config): string {
+  const minutes = config.autonomy?.transientCooldownMinutes ?? 15;
+  return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
+/** Best-effort escalation: log it and push it to the notifications channel,
+ * optionally with tap-to-act buttons (Telegram). Never throws (the notifier
+ * swallows delivery errors), so an escalation can't take a tick down. */
+async function escalate(deps: TickDeps, text: string, buttons?: NotifyButton[]): Promise<void> {
+  (deps.log ?? (() => {}))(`escalation: ${text}`);
+  await (deps.notify ?? makeNotifier(deps.config, deps.log)).send(text, buttons);
+}
+
+/** Buttons offered on a per-ticket park escalation: retry just this ticket, or
+ * pause the whole scheduler. The callback data is handled by the bot (bot.ts). */
+function parkButtons(ticketId: string): NotifyButton[] {
+  return [
+    { label: '🔁 Retry this ticket', data: `retry:${ticketId}` },
+    { label: '⏸ Pause scheduler', data: 'pause' },
+  ];
+}
+
+/** Advance a ticket's transient-failure backoff. Returns 'cooldown' (set an
+ * auto-lifting cooldown; budget remains) or 'exhausted' (the env problem isn't
+ * clearing for this ticket — caller parks + escalates it as genuine). */
+function nextTransientStep(deps: TickDeps, state: SchedulerState, ticketId: string): 'cooldown' | 'exhausted' {
+  const prev = state.cooldowns[ticketId]?.count ?? 0;
+  const max = deps.config.autonomy?.maxTransientRetries ?? 4;
+  if (prev >= max) {
+    delete state.cooldowns[ticketId];
+    return 'exhausted';
+  }
+  state.cooldowns[ticketId] = { until: cooldownUntil(deps.config), count: prev + 1 };
+  return 'cooldown';
+}
+
+/** Record one failure against the circuit breaker (mutates `state`; caller
+ * saves). When consecutive failures reach the threshold the scheduler halts —
+ * a long pause + reset + escalation — because a run of failures across tickets
+ * means the environment is broken, not the tickets. Counts BOTH transient and
+ * genuine failures; any success resets the streak via `clearBreaker`. */
+async function recordBreakerFailure(deps: TickDeps, state: SchedulerState): Promise<void> {
+  state.consecutiveFailures = (state.consecutiveFailures ?? 0) + 1;
+  const threshold = deps.config.autonomy?.circuitBreakerThreshold ?? 3;
+  if (threshold <= 0 || state.consecutiveFailures < threshold) return;
+  const tripped = state.consecutiveFailures;
+  state.pausedUntil = haltUntil(deps.config);
+  state.consecutiveFailures = 0;
+  await escalate(
+    deps,
+    `🚨 Scheduler circuit breaker tripped after ${tripped} consecutive failures. This usually means a systemic problem — expired gh/claude auth, the dev server is down, or no network — not bad tickets. Pausing all ticks until ${state.pausedUntil}; it resumes automatically. Check the environment.`,
+    [{ label: '▶️ Resume now', data: 'resume' }],
+  );
+}
+
+/** A success/resolution clears the consecutive-failure streak and any cooldown
+ * the ticket had accrued. */
+function clearBreaker(state: SchedulerState, ticketId: string): void {
+  state.consecutiveFailures = 0;
+  delete state.cooldowns[ticketId];
+}
+
+function transientComment(reason: string, count: number, max: number, until: string): string {
+  return [
+    `🤖 Scheduler: hit a transient/environmental problem — ${reason}.`,
+    '',
+    `This is not the ticket's fault, so it does not count as a failed attempt. Backing off and retrying automatically after ${until} (transient retry ${count} of ${max}). No action needed unless it keeps recurring.`,
+  ].join('\n');
 }
 
 /**

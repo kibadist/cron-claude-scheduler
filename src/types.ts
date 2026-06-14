@@ -27,6 +27,35 @@ export interface ClaudeConfig {
   args?: string[];
 }
 
+/** Tuning for unattended operation: how aggressively to retry transient
+ * failures and when to halt on systemic breakage. All optional. */
+export interface AutonomyConfig {
+  /** consecutive failures (of any kind, across tickets) before the scheduler
+   * halts itself and escalates — a run of failures means something systemic
+   * (auth, dev server, network), not bad tickets (default 3; 0 disables) */
+  circuitBreakerThreshold?: number;
+  /** how long the scheduler pauses after the breaker trips, before trying
+   * again (default 60) */
+  haltCooldownMinutes?: number;
+  /** backoff before retrying a ticket that hit a transient/environmental
+   * failure (workspace prep, network, dev server) — auto-lifts, no human
+   * touch needed (default 15) */
+  transientCooldownMinutes?: number;
+  /** how many transient cooldown cycles a single ticket gets before the
+   * failure is treated as genuine and escalated (default 4) */
+  maxTransientRetries?: number;
+}
+
+/** Where to push an escalation when the scheduler genuinely needs a human.
+ * Omit entirely to log escalations only (no external push). */
+export interface NotificationsConfig {
+  type: 'slack' | 'discord' | 'telegram' | 'webhook';
+  /** incoming-webhook URL for slack / discord / generic webhook */
+  url?: string;
+  /** bot credentials for type "telegram" */
+  telegram?: { botToken: string; chatId: string };
+}
+
 export interface StatusConfig {
   todo: string;
   inProgress: string;
@@ -50,6 +79,10 @@ export interface Config {
    * verified PR cannot be merged, before falling back to skip-until-touched
    * (default 1; 0 disables) */
   maxMergeResolves?: number;
+  /** unattended-operation tuning (circuit breaker, transient backoff) */
+  autonomy?: AutonomyConfig;
+  /** escalation channel for tickets that genuinely need a human */
+  notifications?: NotificationsConfig;
 }
 
 export interface TicketComment {

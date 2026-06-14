@@ -6,6 +6,20 @@
     "model": "opus"
   },
   "maxRetries": 1,
+  "maxMergeResolves": 1,
+  "autonomy": {
+    "circuitBreakerThreshold": 3,
+    "haltCooldownMinutes": 60,
+    "transientCooldownMinutes": 15,
+    "maxTransientRetries": 4
+  },
+  "notifications": {
+    "type": "telegram",
+    "telegram": {
+      "botToken": "123456789:ABCdef_your_bot_token_from_BotFather",
+      "chatId": "123456789"
+    }
+  },
   "statuses": {
     "todo": "Todo",
     "inProgress": "In Progress",

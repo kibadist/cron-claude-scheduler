@@ -3,6 +3,8 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ConfigError, loadConfig, requireApiKey } from './config.js';
 import { LinearApi } from './linear.js';
+import { makeNotifier } from './notify.js';
+import { processBotUpdates } from './bot.js';
 import { runAutoTick, runReviewTick, runTick } from './tick.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -19,6 +21,7 @@ async function main(): Promise<void> {
   mkdirSync(paths.logsDir, { recursive: true });
 
   const log = (msg: string): void => console.log(`[${new Date().toISOString()}] ${msg}`);
+  const notify = makeNotifier(config, log);
   const loop = process.argv.includes('--loop');
   // Default: work the Todo queue, and verify In Review tickets when idle.
   // --work / --review restrict a run to a single mode.
@@ -31,7 +34,10 @@ async function main(): Promise<void> {
   do {
     log(`${label} starting (pid ${process.pid})`);
     try {
-      const outcome = await tick({ config, linear, paths, log });
+      // Drain Telegram commands/taps first so /pause and /resume take effect
+      // even while the scheduler is paused (a paused tick does nothing else).
+      await processBotUpdates({ config, paths, log });
+      const outcome = await tick({ config, linear, paths, log, notify });
       log(`${label}: ${outcome}`);
     } catch (err) {
       // A transient Linear/network error must not kill the loop (or spew a

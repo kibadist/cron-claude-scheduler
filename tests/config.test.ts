@@ -102,6 +102,37 @@ describe('loadConfig', () => {
     expect(() => loadConfig(writeConfig({ maxMergeResolves: 2.5 }))).toThrow(/maxMergeResolves/);
   });
 
+  it('defaults autonomy and validates its fields', () => {
+    const a = loadConfig(writeConfig()).autonomy!;
+    expect(a).toEqual({
+      circuitBreakerThreshold: 3,
+      haltCooldownMinutes: 60,
+      transientCooldownMinutes: 15,
+      maxTransientRetries: 4,
+    });
+    expect(loadConfig(writeConfig({ autonomy: { circuitBreakerThreshold: 0 } })).autonomy!.circuitBreakerThreshold).toBe(0);
+    expect(loadConfig(writeConfig({ autonomy: { maxTransientRetries: 2 } })).autonomy!.maxTransientRetries).toBe(2);
+    expect(() => loadConfig(writeConfig({ autonomy: { circuitBreakerThreshold: -1 } }))).toThrow(/circuitBreakerThreshold/);
+    expect(() => loadConfig(writeConfig({ autonomy: { haltCooldownMinutes: 0 } }))).toThrow(/haltCooldownMinutes/);
+    expect(() => loadConfig(writeConfig({ autonomy: { transientCooldownMinutes: 1.5 } }))).toThrow(/transientCooldownMinutes/);
+    expect(() => loadConfig(writeConfig({ autonomy: 'nope' }))).toThrow(/autonomy/);
+  });
+
+  it('validates notifications and leaves them undefined by default', () => {
+    expect(loadConfig(writeConfig()).notifications).toBeUndefined();
+    expect(loadConfig(writeConfig({ notifications: { type: 'slack', url: 'https://hooks.slack.com/x' } })).notifications).toEqual({
+      type: 'slack',
+      url: 'https://hooks.slack.com/x',
+    });
+    expect(
+      loadConfig(writeConfig({ notifications: { type: 'telegram', telegram: { botToken: 'T', chatId: '1' } } }))
+        .notifications,
+    ).toEqual({ type: 'telegram', telegram: { botToken: 'T', chatId: '1' } });
+    expect(() => loadConfig(writeConfig({ notifications: { type: 'carrier-pigeon' } }))).toThrow(/notifications.type/);
+    expect(() => loadConfig(writeConfig({ notifications: { type: 'slack', url: 'ftp://x' } }))).toThrow(/url/);
+    expect(() => loadConfig(writeConfig({ notifications: { type: 'telegram' } }))).toThrow(/telegram/);
+  });
+
   it('leaves model/args undefined by default and validates them', () => {
     const base = loadConfig(writeConfig());
     expect(base.claude.model).toBeUndefined();

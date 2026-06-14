@@ -99,6 +99,11 @@ From then on: write a ticket, move it to **Todo**, and merge the PR once the tic
 | `claude.args` | Extra CLI flags appended to every `claude` invocation, e.g. `["--verbose"]` (optional, escape hatch) |
 | `maxRetries` | How many times a failed verification automatically moves the ticket back to Todo for re-implementation before requiring your touch (optional, default `1`; `0` disables) |
 | `maxMergeResolves` | How many times the scheduler auto-heals a verified-but-unmergeable PR — resolving a real conflict, or updating a branch that's merely behind base — before requiring your touch (optional, default `1`; `0` disables) |
+| `autonomy.circuitBreakerThreshold` | Consecutive failures (across tickets, any kind) before the scheduler halts itself and escalates — a run of failures means the environment is broken, not the tickets (optional, default `3`; `0` disables) |
+| `autonomy.haltCooldownMinutes` | How long the scheduler pauses after the breaker trips, before resuming automatically (optional, default `60`) |
+| `autonomy.transientCooldownMinutes` | Backoff before retrying a ticket that hit a transient/environmental failure — auto-lifts, no human touch (optional, default `15`) |
+| `autonomy.maxTransientRetries` | How many transient cooldown cycles a ticket gets before the failure is escalated as genuine (optional, default `4`) |
+| `notifications` | Escalation channel for tickets that genuinely need a human. `{ "type": "slack"\|"discord"\|"webhook", "url": "…" }` or `{ "type": "telegram", "telegram": { "botToken": "…", "chatId": "…" } }`. Telegram also enables a two-way **control bot** (see below). Omit entirely to log escalations only |
 | `statuses.todo` / `inProgress` / `inReview` | Workflow state **names** in your Linear team (case-insensitive) |
 | `statuses.done` | Target status after a successful verification run (optional, default `"Done"`) |
 | `projects[].linearProject` | Linear project name (case-insensitive; must be unique in the list) |
@@ -162,6 +167,41 @@ For each **In Review** ticket, the scheduler:
 With `mergeOnVerified` the loop is fully autonomous: code reaches `main` only after a passing browser verification, failures stay isolated on their branches, and your only job is writing tickets. Tickets without a PR branch (`main-push`, manually merged PRs) are verified against the base branch tip — the verifier is told the work should already be merged there, and its absence is a FAIL.
 
 Work ticks and verification ticks share the same lockfile, so they never run simultaneously — and the default tick already alternates between them, so the single launchd agent drives the entire Todo → In Review → Done loop with no extra setup.
+
+### Unattended operation (autonomy)
+
+The scheduler is built to run for long stretches with no one watching, so it distinguishes *why* something failed and never gets silently stuck:
+
+- **Transient vs. genuine failures.** An environmental hiccup (workspace prep, network, the dev server not starting, gh auth) is **not** the ticket's fault: the ticket gets an auto-lifting **cooldown** (`autonomy.transientCooldownMinutes`) and retries on its own — it does **not** consume a re-implementation attempt. Only a genuine "the work is wrong" verification failure burns `maxRetries`. A ticket that keeps hitting transient problems is escalated after `autonomy.maxTransientRetries` cycles.
+- **Circuit breaker.** A run of `autonomy.circuitBreakerThreshold` consecutive failures (default 3, any kind, across tickets) almost always means something systemic — expired gh/claude auth, a dead dev server, no network — not three bad tickets. The scheduler then **halts itself** (pauses for `autonomy.haltCooldownMinutes`, default 60), escalates once, and resumes automatically. Any success resets the streak.
+- **Escalation.** When a ticket is genuinely parked, or the breaker trips, the scheduler pushes a notification to your `notifications` channel (Slack / Discord / Telegram / generic webhook) so "skipped until you touch it" actually reaches you. With no channel configured, escalations are logged only. Delivery is best-effort and never blocks or crashes a tick.
+
+### Telegram control bot
+
+If your `notifications.type` is `telegram`, the same bot becomes **two-way** — you can drive the scheduler from your phone, and escalation alerts carry tap-to-act buttons.
+
+**Setup:**
+1. Message [@BotFather](https://t.me/BotFather) → `/newbot`, copy the **bot token**.
+2. Start a chat with your new bot (send it any message), then get your **chat id** (e.g. message [@userinfobot](https://t.me/userinfobot), or read it from `https://api.telegram.org/bot<token>/getUpdates`).
+3. Put both in `config.json` and restart the loop:
+   ```json
+   "notifications": { "type": "telegram", "telegram": { "botToken": "…", "chatId": "…" } }
+   ```
+
+**Commands** (also available as buttons on alerts):
+
+| Command | Does |
+|---|---|
+| `/status` | What's running, paused, parked, cooling, and the failure streak |
+| `/parked` | List tickets parked (need a human) or cooling down (auto-retry) |
+| `/retry <DET-123>` | Re-queue one parked ticket — the equivalent of editing it in Linear |
+| `/retryall` | Re-queue **every** parked + cooling ticket (the bulk un-stick) |
+| `/pause` | Stop all ticks |
+| `/resume` | Resume ticks, and lift a circuit-breaker halt |
+
+Park alerts show **🔁 Retry this ticket** / **⏸ Pause scheduler**; a breaker-halt alert shows **▶️ Resume now**.
+
+The bot is polled **once per tick** (no extra process), so commands take effect within one `pollIntervalMinutes`. Only your configured `chatId` is honoured — messages from anyone else are ignored. Updates are processed exactly once via a persisted cursor, and `/pause`/`/resume` work even while the scheduler is paused.
 
 ## Safety notes
 

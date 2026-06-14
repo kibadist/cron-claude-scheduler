@@ -1,8 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import type { Config, GitFlow, ProjectConfig } from './types.js';
+import type { AutonomyConfig, Config, GitFlow, NotificationsConfig, ProjectConfig } from './types.js';
 
 const GIT_FLOWS: readonly GitFlow[] = ['branch-pr', 'branch-push', 'main-push'];
+
+const DEFAULT_AUTONOMY: Required<AutonomyConfig> = {
+  circuitBreakerThreshold: 3,
+  haltCooldownMinutes: 60,
+  transientCooldownMinutes: 15,
+  maxTransientRetries: 4,
+};
 
 export class ConfigError extends Error {}
 
@@ -75,6 +82,9 @@ export function validateConfig(raw: unknown): Config {
   )
     fail('maxMergeResolves must be a non-negative integer when set');
 
+  const autonomy = validateAutonomy(c.autonomy);
+  const notifications = validateNotifications(c.notifications);
+
   if (!Array.isArray(c.projects) || c.projects.length === 0)
     fail('projects must be a non-empty array');
   const projects = (c.projects as unknown[]).map((p, i) => validateProject(p, i));
@@ -101,7 +111,49 @@ export function validateConfig(raw: unknown): Config {
     projects,
     maxRetries: (c.maxRetries as number | undefined) ?? 1,
     maxMergeResolves: (c.maxMergeResolves as number | undefined) ?? 1,
+    autonomy,
+    ...(notifications && { notifications }),
   };
+}
+
+function validateAutonomy(raw: unknown): AutonomyConfig {
+  if (raw === undefined) return DEFAULT_AUTONOMY;
+  if (typeof raw !== 'object' || raw === null) fail('autonomy must be an object when set');
+  const a = raw as Record<string, unknown>;
+  const intField = (key: keyof AutonomyConfig, min: number): number | undefined => {
+    const v = a[key];
+    if (v === undefined) return undefined;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < min)
+      fail(`autonomy.${key} must be an integer >= ${min} when set`);
+    return v;
+  };
+  return {
+    circuitBreakerThreshold: intField('circuitBreakerThreshold', 0) ?? DEFAULT_AUTONOMY.circuitBreakerThreshold,
+    haltCooldownMinutes: intField('haltCooldownMinutes', 1) ?? DEFAULT_AUTONOMY.haltCooldownMinutes,
+    transientCooldownMinutes: intField('transientCooldownMinutes', 1) ?? DEFAULT_AUTONOMY.transientCooldownMinutes,
+    maxTransientRetries: intField('maxTransientRetries', 0) ?? DEFAULT_AUTONOMY.maxTransientRetries,
+  };
+}
+
+function validateNotifications(raw: unknown): NotificationsConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'object' || raw === null) fail('notifications must be an object when set');
+  const n = raw as Record<string, unknown>;
+  const types = ['slack', 'discord', 'telegram', 'webhook'] as const;
+  if (!types.includes(n.type as (typeof types)[number]))
+    fail(`notifications.type must be one of: ${types.join(', ')}`);
+  if (n.type === 'telegram') {
+    const t = n.telegram as Record<string, unknown> | undefined;
+    if (typeof t !== 'object' || t === null) fail('notifications.telegram is required for type "telegram"');
+    if (typeof t.botToken !== 'string' || t.botToken.length === 0)
+      fail('notifications.telegram.botToken must be a non-empty string');
+    if (typeof t.chatId !== 'string' || t.chatId.length === 0)
+      fail('notifications.telegram.chatId must be a non-empty string');
+    return { type: 'telegram', telegram: { botToken: t.botToken, chatId: t.chatId } };
+  }
+  if (typeof n.url !== 'string' || !/^https?:\/\//.test(n.url))
+    fail(`notifications.url must be an http(s) URL for type "${n.type as string}"`);
+  return { type: n.type as 'slack' | 'discord' | 'webhook', url: n.url };
 }
 
 function validateProject(raw: unknown, index: number): ProjectConfig {

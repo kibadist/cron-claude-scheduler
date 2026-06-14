@@ -176,6 +176,27 @@ export function prUrlForBranch(cwd: string, branch: string): string | null {
   }
 }
 
+/** Why did a run fail? 'transient' = the environment hiccupped (workspace prep,
+ * network, dev server, gh auth) — retrying later may just work, so it should NOT
+ * burn the ticket's re-implementation budget. 'genuine' = the work itself didn't
+ * pass (the default; anything not recognisably environmental). Used to route a
+ * failure to a backoff-and-retry vs. a re-implementation/escalation. */
+export type FailureKind = 'transient' | 'genuine';
+
+export function classifyFailure(detail: string, logText = ''): FailureKind {
+  const hay = `${detail}\n${logText}`.toLowerCase();
+  const transient =
+    /could not prepare the (work|verification|conflict-resolution) workspace/.test(hay) ||
+    /econnrefused|connection refused|connection reset|could not connect|socket hang ?up|etimedout|esockettimedout|getaddrinfo|enotfound|enetunreach|fetch failed|network (?:error|is unreachable)|dns/.test(
+      hay,
+    ) ||
+    /dev server|server (?:did not|didn't|failed to) start|address already in use|eaddrinuse/.test(hay) ||
+    /gh auth|not logged in|authentication failed|unauthorized|http 401|http 403|bad credentials|could not (?:read|find) git remote|failed to connect to github/.test(
+      hay,
+    );
+  return transient ? 'transient' : 'genuine';
+}
+
 export function verifyWork(project: ProjectConfig, branch: string, preRunSha: string): VerifyResult {
   // A network hiccup or auth failure during ls-remote must surface as a soft
   // verification failure on the ticket, never crash the scheduler.

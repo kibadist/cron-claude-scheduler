@@ -28,11 +28,40 @@ export interface SchedulerState {
   /** issueId -> number of automatic merge-conflict resolutions performed for a
    * verified-but-unmergeable PR; cleared when the ticket reaches Done */
   resolves: Record<string, number>;
+  /** issueId -> a transient/environmental backoff: the ticket is skipped until
+   * `until` passes (auto-lifts, no human touch), `count` bounds how many such
+   * cycles it gets before the failure is escalated as genuine */
+  cooldowns: Record<string, { until: string; count: number }>;
+  /** consecutive failures across all tickets; trips the circuit breaker at the
+   * configured threshold and resets to 0 on any success/resolution */
+  consecutiveFailures: number;
+  /** issueId -> the ticket's human identifier (e.g. "DET-343"), recorded for any
+   * ticket the scheduler touches so the Telegram bot can list/resolve tickets
+   * by identifier without a Linear round-trip; pruned when the ticket is Done */
+  labels: Record<string, string>;
+  /** Telegram getUpdates cursor: the next update_id to fetch, so bot commands
+   * are processed exactly once across ticks */
+  telegramOffset?: number;
+}
+
+/** A fresh empty state — MUST be a factory, not a shared const spread shallowly:
+ * a shallow copy would alias the nested `skips`/`cooldowns`/… maps across every
+ * caller, so one tick's writes would leak into the next tick's "empty" state. */
+function emptyState(): SchedulerState {
+  return {
+    active: null,
+    skips: {},
+    branches: {},
+    retries: {},
+    resolves: {},
+    cooldowns: {},
+    consecutiveFailures: 0,
+    labels: {},
+  };
 }
 
 export function loadState(statePath: string): SchedulerState {
-  if (!existsSync(statePath))
-    return { active: null, skips: {}, branches: {}, retries: {}, resolves: {} };
+  if (!existsSync(statePath)) return emptyState();
   try {
     const raw = JSON.parse(readFileSync(statePath, 'utf8')) as Partial<SchedulerState>;
     return {
@@ -41,10 +70,14 @@ export function loadState(statePath: string): SchedulerState {
       branches: raw.branches ?? {},
       retries: raw.retries ?? {},
       resolves: raw.resolves ?? {},
+      cooldowns: raw.cooldowns ?? {},
+      consecutiveFailures: raw.consecutiveFailures ?? 0,
+      labels: raw.labels ?? {},
       ...(raw.pausedUntil !== undefined && { pausedUntil: raw.pausedUntil }),
+      ...(raw.telegramOffset !== undefined && { telegramOffset: raw.telegramOffset }),
     };
   } catch {
-    return { active: null, skips: {}, branches: {}, retries: {}, resolves: {} };
+    return emptyState();
   }
 }
 
@@ -61,4 +94,11 @@ export function isSkipped(state: SchedulerState, issueId: string, updatedAt: str
   if (!recordedAt) return false;
   // ISO 8601 strings compare correctly lexicographically.
   return updatedAt <= recordedAt;
+}
+
+/** Is the ticket in a transient-failure backoff that hasn't elapsed yet? Unlike
+ * a skip, this auto-lifts once `until` passes — no human touch required. */
+export function isCoolingDown(state: SchedulerState, issueId: string, now: Date = new Date()): boolean {
+  const cd = state.cooldowns[issueId];
+  return cd !== undefined && now.toISOString() < cd.until;
 }
