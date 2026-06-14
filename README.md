@@ -27,7 +27,8 @@ Design principles:
 
 - **Never trust the agent's word.** After every run the scheduler independently verifies the work landed on the remote (`git ls-remote`, `gh pr view`). "I pushed it" without a branch on origin is reported as a failure. Browser verification is fail-closed: only an explicit final `VERDICT: PASS` closes a ticket.
 - **Never touch the user's checkout.** Every run — work and verification — happens in a disposable git worktree in a temp directory. Your open editor, current branch, and uncommitted changes are physically out of reach.
-- **Fail loudly, in Linear.** A failed run posts a 🤖 comment with the error and the log tail — you see failures where you already work.
+- **Fail loudly — and reach you.** A failed run posts a 🤖 comment with the error and the log tail where you already work, and genuinely-stuck tickets are pushed to your notifications channel (Slack / Discord / Telegram). From the **Telegram control bot** you can retry, pause, or resume right from your phone.
+- **Self-heal what's mechanical; escalate what isn't.** Transient/environmental failures back off and retry themselves without burning attempts; merge conflicts and out-of-date branches are resolved automatically; a run of failures trips a **circuit breaker** that halts and escalates rather than thrashing. A human is pulled in only when one is genuinely needed.
 - **One ticket at a time.** A PID lockfile serializes runs machine-wide. Predictable load, no token storms.
 - **Crash-safe.** State is persisted before every irreversible step; a killed run (reboot, crash) is detected on the next tick and the ticket is recovered automatically.
 
@@ -89,6 +90,8 @@ From then on: write a ticket, move it to **Todo**, and merge the PR once the tic
 }
 ```
 
+This is the minimal shape. All other fields (`claude.model`, `maxRetries`, `maxMergeResolves`, `autonomy`, `notifications`, per-project `model`) are optional with sane defaults — see the table below, and [`config.example.json`](config.example.json) for a fully-populated example.
+
 | Field | Meaning |
 |---|---|
 | `pollIntervalMinutes` | How often a tick fires (positive integer) |
@@ -133,7 +136,8 @@ Config is validated on startup with specific error messages (missing path, not a
 4. **Verify** — the scheduler checks the remote itself; the agent's claims are never trusted.
 5. **Finalize** —
    - **Success:** ticket → *In Review*, 🤖 comment with the branch and PR link.
-   - **Failure** (non-zero exit, timeout, or verification failed): 🤖 comment with the error and last 30 log lines, ticket → back to *Todo*, and it's **skipped** until you edit or comment on it — your touch means "try again". This prevents a broken ticket from burning tokens in a retry loop.
+   - **Transient failure** (workspace prep, network, dev server, gh auth): ticket → back to *Todo* with an **auto-lifting cooldown** — it retries itself without burning anything (see [Unattended operation](#unattended-operation-autonomy)).
+   - **Genuine failure** (non-zero exit, timeout, the work didn't pass): 🤖 comment with the error and last 30 log lines, ticket → back to *Todo*, **skipped** until you edit or comment on it, and an **escalation** is pushed to your notifications channel. Your touch means "try again"; this prevents a broken ticket from burning tokens in a retry loop.
 6. **Hand-off** — the pushed branch is recorded against the ticket (so even renaming the ticket later can't lose it), and the ticket waits in *In Review* for a verification tick.
 
 ## Day-to-day commands
@@ -231,28 +235,33 @@ The two compose fine: use this for the local factory floor, and `/schedule` for 
 | `branch pushed but no PR was found` | `gh auth login`, or the repo's remote isn't on GitHub — switch that project to `branch-push` |
 | Ticket stuck skipped | That's by design after a failure — **add** a comment or edit the ticket to re-queue it. Deleting the 🤖 failure comment does NOT count: Linear doesn't register deletions as updates |
 | `paused until …` in the log | claude hit its usage/rate limit — the affected ticket went back to its queue untouched and ticks resume automatically after `limitCooldownMinutes` |
+| `circuit breaker tripped` escalation | A run of consecutive failures — usually systemic (expired `gh`/`claude` auth, dead dev server, no network). Fix the environment; it resumes after `autonomy.haltCooldownMinutes`, or `/resume` from the bot to lift it now |
+| Telegram bot doesn't respond | The bot runs **only in `--loop` mode with a telegram channel** — confirm `npm run loop` is running and the log shows `Telegram control bot active`. After config changes, restart the loop. Only your configured `chatId` is honoured |
 | `Workflow state "…" not found` | Your Linear team uses different status names — set them in `statuses.*` |
 | Nothing happens after install | `tail -f logs/launchd.log`; confirm the plist loaded with `launchctl list \| grep claude-scheduler` |
 
 ## Development
 
 ```bash
-npm test            # 76 tests: unit + full-lifecycle integration
-npx tsc --noEmit    # typecheck
+npm test            # 150+ tests: unit + full-lifecycle integration
+npm run build       # typecheck (tsc)
 ```
 
 The integration tests exercise both lifecycles (work and verification) against **real temporary git repositories** (a bare repo standing in for origin) with **stub `claude` executables** and an **in-memory Linear fake** — no API keys, no tokens, no network.
 
 ```
 src/
-  index.ts     entrypoint: unified tick by default; --work / --review / --loop
-  tick.ts      orchestration: lock → recover → select → claim → run → verify → finalize
+  index.ts     entrypoint: unified tick by default; --work / --review / --loop; starts the bot poller
+  tick.ts      orchestration: lock → recover → select → claim → run → verify → finalize → escalate
   config.ts    config.json loading + validation
   linear.ts    Linear API gateway (@linear/sdk)
   runner.ts    spawns claude, streams log, enforces timeout
-  verify.ts    independent push/PR verification + PR comments
+  verify.ts    independent push/PR verification, merge/conflict self-heal, failure classification
   worktree.ts  disposable git worktrees (work + verification isolation)
-  prompt.ts    ticket → agent prompts (work + verify) + branch naming
-  state.ts     crash recovery, failed-ticket skip list, ticket → branch map
+  prompt.ts    ticket → agent prompts (work + verify + conflict-resolve) + branch naming
+  assets.ts    downloads ticket images (private Linear uploads) for the agent
+  state.ts     crash recovery, skip list, cooldowns, retries, breaker streak, ticket → branch/label maps
+  notify.ts    escalation notifier (Slack / Discord / Telegram / webhook)
+  bot.ts       two-way Telegram control bot (commands + inline buttons)
   lock.ts      PID lockfile (one run at a time)
 ```
