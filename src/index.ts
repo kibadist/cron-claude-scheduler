@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { ConfigError, loadConfig, requireApiKey } from './config.js';
 import { LinearApi } from './linear.js';
 import { makeNotifier } from './notify.js';
-import { processBotUpdates } from './bot.js';
+import { makeTelegramClient, processBotUpdates } from './bot.js';
 import { runAutoTick, runReviewTick, runTick } from './tick.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -38,10 +38,13 @@ async function main(): Promise<void> {
   const botActive = loop && config.notifications?.type === 'telegram';
   let botBusy = false;
   if (botActive) {
+    // One client for the process lifetime, so its transient-failure log
+    // dedup survives across polls (a flaky network logs once, not every 8s).
+    const client = makeTelegramClient(config.notifications!.telegram!.botToken, log);
     const timer = setInterval(() => {
       if (botBusy) return;
       botBusy = true;
-      processBotUpdates({ config, paths, log })
+      processBotUpdates({ config, paths, log, client })
         .catch((e: unknown) => log(`bot poll error: ${describeError(e)}`))
         .finally(() => {
           botBusy = false;

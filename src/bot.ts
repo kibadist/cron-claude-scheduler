@@ -238,6 +238,11 @@ export function makeTelegramClient(botToken: string, log: (msg: string) => void 
     if (!res.ok) throw new Error(`telegram ${method} HTTP ${res.status}`);
     return (await res.json()) as { result?: unknown };
   }
+  // getUpdates failures (network blips, Telegram slowness) are expected and
+  // self-healing — unfetched updates stay queued for the next poll. Collapse a
+  // run of them into one log line + every 10th + a recovery line, so a flaky
+  // network can't spam the log while a genuine outage is still visible.
+  let getUpdatesFailures = 0;
   return {
     async getUpdates(offset: number): Promise<TgUpdate[]> {
       try {
@@ -246,9 +251,15 @@ export function makeTelegramClient(botToken: string, log: (msg: string) => void 
           timeout: 0,
           allowed_updates: ['message', 'callback_query'],
         });
+        if (getUpdatesFailures > 0) {
+          log(`telegram getUpdates recovered after ${getUpdatesFailures} failure(s)`);
+          getUpdatesFailures = 0;
+        }
         return (j.result ?? []) as TgUpdate[];
       } catch (e) {
-        log(`telegram getUpdates failed: ${(e as Error).message}`);
+        getUpdatesFailures += 1;
+        if (getUpdatesFailures === 1 || getUpdatesFailures % 10 === 0)
+          log(`telegram getUpdates failed (${getUpdatesFailures}×, retrying): ${(e as Error).message}`);
         return [];
       }
     },

@@ -1,8 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { processBotUpdates, MANUAL_PAUSE_UNTIL, type TgUpdate, type TelegramClient } from '../src/bot.js';
+import {
+  processBotUpdates,
+  makeTelegramClient,
+  MANUAL_PAUSE_UNTIL,
+  type TgUpdate,
+  type TelegramClient,
+} from '../src/bot.js';
 import { loadState, saveState, type SchedulerState } from '../src/state.js';
 import type { Config } from '../src/types.js';
 
@@ -187,5 +193,32 @@ describe('processBotUpdates', () => {
     await processBotUpdates({ config: config(), paths, client });
     expect(sent[0].text).toContain('/retry');
     expect(sent[0].text).toContain('/pause');
+  });
+});
+
+describe('makeTelegramClient resilience', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('returns [] on a getUpdates failure and collapses a run of them in the log', async () => {
+    const logs: string[] = [];
+    let failing = true;
+    globalThis.fetch = vi.fn(async () => {
+      if (failing) throw new Error('The operation was aborted due to timeout');
+      return { ok: true, json: async () => ({ result: [] }) } as Response;
+    }) as typeof fetch;
+
+    const client = makeTelegramClient('TOK', (m) => logs.push(m));
+
+    for (let i = 0; i < 5; i++) expect(await client.getUpdates(0)).toEqual([]); // never throws
+    const failLogs = logs.filter((l) => l.includes('getUpdates failed'));
+    expect(failLogs).toHaveLength(1); // only the first of the 5 is logged
+    expect(failLogs[0]).toContain('1×');
+
+    failing = false;
+    await client.getUpdates(0);
+    expect(logs.some((l) => l.includes('recovered after 5'))).toBe(true);
   });
 });
